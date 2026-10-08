@@ -112,7 +112,12 @@ test('post limits and response labels are validated and headings receive the dis
   assert.equal(detail.title, null);
   assert.equal(detail.responseLabel, 'Just sharing');
   assert.equal((await request('/posts', 'POST', author, { body: 'x'.repeat(10000) })).status, 201);
+  assert.equal((await request('/posts', 'POST', author, { body: '界'.repeat(10000) })).status, 201);
   assert.equal((await request(`/posts/${legacy.body.id}`, 'PATCH', author, { body: 'x'.repeat(10001) })).status, 400);
+  const large = await fetch(base + '/posts', { method: 'POST', headers: { origin: 'http://localhost:3001', 'content-type': 'application/json', cookie: author.cookie }, body: JSON.stringify({ body: 'x'.repeat(70000) }) });
+  assert.equal(large.status, 413); assert.match((await large.json() as { error: string }).error, /too large/);
+  const malformed = await fetch(base + '/posts', { method: 'POST', headers: { origin: 'http://localhost:3001', 'content-type': 'application/json' }, body: '{' });
+  assert.equal(malformed.status, 400);
 });
 
 test('reply notifications are private, durable and only created for another member replying', async () => {

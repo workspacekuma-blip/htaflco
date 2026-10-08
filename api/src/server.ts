@@ -17,7 +17,8 @@ export const app = express();
 app.disable('x-powered-by');
 if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 app.use(helmet());
-app.use(express.json({ limit: '20kb' }));
+// A 10,000-character story can occupy 30 KB in UTF-8 (more when JSON-escaped).
+app.use(express.json({ limit: '64kb' }));
 app.use(cookieParser());
 app.use(readSession);
 
