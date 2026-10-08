@@ -83,7 +83,7 @@ CREATE TABLE ranking_snapshots (
   items       jsonb NOT NULL DEFAULT '[]'
 );
 
--- Frozen weekly winners so past Featured posts stay visible.
+-- Latest recorded winners per UTC Monday-start week. Current week updates; past weeks freeze.
 CREATE TABLE featured_archive (
   week_start date PRIMARY KEY,
   items      jsonb NOT NULL

@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { promisify } from 'node:util';
 import { after, before, beforeEach, test } from 'node:test';
 import type { Server } from 'node:http';
 import jwt from 'jsonwebtoken';
@@ -68,6 +70,27 @@ async function counters(id: string) {
 
 test('health connects to real PostgreSQL', async () => {
   assert.deepEqual(await request('/health'), { status: 200, body: { ok: true } });
+});
+test('password limits reject bcrypt truncation in registration and login, including UTF-8', async () => {
+  for (const password of ['a'.repeat(73), '🔐'.repeat(19)]) {
+    const email = `${randomBytes(8).toString('hex')}@example.test`;
+    const r = await request('/auth/register', 'POST', undefined, { email, password, displayName: 'Password QA', agree: true });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /72 bytes/);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM users WHERE email=$1', [email])).rows[0].n, 0);
+    assert.equal((await request('/auth/login', 'POST', undefined, { email, password })).status, 400);
+  }
+  for (const password of ['a'.repeat(72), '🔐'.repeat(18)]) {
+    const email = `${randomBytes(8).toString('hex')}@example.test`;
+    assert.equal((await request('/auth/register', 'POST', undefined, { email, password, displayName: 'Password QA', agree: true })).status, 201);
+    assert.equal((await request('/auth/login', 'POST', undefined, { email, password })).status, 200);
+    assert.equal((await request('/auth/login', 'POST', undefined, { email, password: password + 'suffix' })).status, 400);
+    const different = password.startsWith('a') ? 'b' + password.slice(1) : '🔑' + password.slice(2);
+    assert.equal((await request('/auth/login', 'POST', undefined, { email, password: different })).status, 401);
+  }
+  const malformed = { email: 'malformed@example.test', password: '\ud800'.repeat(10) };
+  assert.equal((await request('/auth/register', 'POST', undefined, { ...malformed, displayName: 'Password QA', agree: true })).status, 400);
+  assert.equal((await request('/auth/login', 'POST', undefined, malformed)).status, 400);
 });
 test('concurrent repeated votes remain unique; changing and removing preserve counters', async () => {
   const id = await post(await user()); const voter = await user();
@@ -151,6 +174,34 @@ test('new report or distress edit disappears from saved rankings immediately', a
   await request(`/posts/${id}`, 'PATCH', author, { body: 'I want to hurt myself' });
   assert.equal((await request('/feed/featured')).body.items.length, 0);
 });
+test('weekly archives recover a missed Sunday, persist across worker restarts and freeze past weeks', async () => {
+  const id = await post(await user());
+  await pool.query(`INSERT INTO ranking_snapshots(kind,computed_at,items)
+    VALUES('featured', (date_trunc('week',now() AT TIME ZONE 'UTC') - interval '3 days') AT TIME ZONE 'UTC', $1::jsonb)`, [JSON.stringify([id])]);
+  const previousWeek = (await pool.query(`SELECT (date_trunc('week',now() AT TIME ZONE 'UTC')::date - 7)::text AS week`)).rows[0].week;
+  const restart = () => promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e',
+    "require('./src/ranking/worker').runOnce(true).then(()=>require('./src/db').pool.end()).catch(e=>{console.error(e);process.exit(1)})"],
+    { env: process.env, timeout: 15000 });
+  await restart();
+  assert.deepEqual((await pool.query('SELECT items FROM featured_archive WHERE week_start=$1', [previousWeek])).rows[0]?.items, [id]);
+  assert.deepEqual((await pool.query(`SELECT items FROM featured_archive WHERE week_start=date_trunc('week',now() AT TIME ZONE 'UTC')::date`)).rows[0]?.items, []);
+  // A later ranking and fresh process must not replace a completed week's record.
+  await pool.query("UPDATE ranking_snapshots SET computed_at=now()-interval '8 days', items='[]' WHERE kind='featured'");
+  await restart();
+  assert.deepEqual((await pool.query('SELECT items FROM featured_archive WHERE week_start=$1', [previousWeek])).rows[0]?.items, [id]);
+});
+test('Featured ranking and weekly archive updates roll back together on storage failure', async () => {
+  const id = await post(await user());
+  await pool.query("INSERT INTO ranking_snapshots(kind,items) VALUES('featured',$1::jsonb)", [JSON.stringify([id])]);
+  await pool.query(`CREATE FUNCTION reject_archive() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'archive test failure'; END $$;
+    CREATE TRIGGER reject_archive BEFORE INSERT OR UPDATE ON featured_archive FOR EACH ROW EXECUTE FUNCTION reject_archive()`);
+  try {
+    await assert.rejects(computeFeatured(), /archive test failure/);
+    assert.deepEqual((await pool.query("SELECT items FROM ranking_snapshots WHERE kind='featured'")).rows[0].items, [id]);
+  } finally {
+    await pool.query('DROP TRIGGER reject_archive ON featured_archive; DROP FUNCTION reject_archive()');
+  }
+});
 test('moderator promotion, demotion and suspension take effect with the existing session', async () => {
   const member = await user();
   await pool.query("UPDATE users SET role='moderator' WHERE id=$1", [member.id]);
@@ -189,9 +240,59 @@ test('local S3 upload, CORS, ownership, type and size checks', {
   const feed = await request('/feed/latest');
   const publicPicture = feed.body.items.find((p: any) => p.id === saved.body.id).mediaUrl;
   const image = await fetch(publicPicture);
-  assert.ok(image.ok); assert.deepEqual(Buffer.from(await image.arrayBuffer()), fixture);
+  assert.ok(image.ok);
+  assert.match(publicPicture, /\/pictures\/[0-9a-f-]+\/[0-9a-f-]+\.jpg$/);
+  const publishedBytes = Buffer.from(await image.arrayBuffer());
+  assert.equal(image.headers.get('content-type'), 'image/jpeg');
+  assert.deepEqual([...publishedBytes.subarray(0, 3)], [255, 216, 255]);
+  // The still-valid upload link may replace staging bytes, but never the attached picture.
+  assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: Buffer.from('not an image') })).ok);
+  assert.deepEqual(Buffer.from(await (await fetch(publicPicture)).arrayBuffer()), publishedBytes);
+  assert.equal((await request('/posts', 'POST', author, { body: 'Replaced staging bytes', mediaKey: signed.body.key })).status, 400);
   assert.equal((await request('/posts', 'POST', other, { body: 'Stolen picture', mediaKey: signed.body.key })).status, 400);
   const oversized = await request('/media/upload-url', 'POST', author, { contentType: 'image/png' });
   assert.ok((await fetch(oversized.body.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: Buffer.alloc(2_000_001) })).ok);
   assert.equal((await request('/posts', 'POST', author, { body: 'Oversized picture', mediaKey: oversized.body.key })).status, 400);
+});
+test('local S3 rejects forged, corrupt, mismatched and excessive-pixel picture contents', {
+  skip: !/^http:\/\/(localhost|127\.0\.0\.1):9000$/.test(process.env.S3_ENDPOINT ?? ''),
+}, async () => {
+  const sharp = (await import('sharp')).default;
+  const author = await user();
+  const png = readFileSync('../scripts/fixtures/upload-test.png');
+  const cases = [
+    { contentType: 'image/jpeg', bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>') },
+    { contentType: 'image/png', bytes: png.subarray(0, 50) },
+    { contentType: 'image/jpeg', bytes: png },
+    { contentType: 'image/png', bytes: await sharp({ create: { width: 5000, height: 5000, channels: 3, background: 'white' } }).png().toBuffer() },
+  ];
+  for (const c of cases) {
+    const signed = await request('/media/upload-url', 'POST', author, { contentType: c.contentType });
+    assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': c.contentType }, body: c.bytes })).ok);
+    assert.equal((await request('/posts', 'POST', author, { body: 'Invalid picture test', mediaKey: signed.body.key })).status, 400);
+  }
+  assert.equal((await request('/feed/latest')).body.items.length, 0);
+});
+test('local S3 fully decodes JPEG, PNG and WebP, rotates and strips embedded metadata', {
+  skip: !/^http:\/\/(localhost|127\.0\.0\.1):9000$/.test(process.env.S3_ENDPOINT ?? ''),
+}, async () => {
+  const sharp = (await import('sharp')).default;
+  const author = await user();
+  const png = readFileSync('../scripts/fixtures/upload-test.png');
+  for (const [format, contentType] of [['jpeg', 'image/jpeg'], ['png', 'image/png'], ['webp', 'image/webp']] as const) {
+    const bytes = await sharp(png).withMetadata({ orientation: 6 }).toFormat(format).toBuffer();
+    const signed = await request('/media/upload-url', 'POST', author, { contentType });
+    assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': contentType }, body: bytes })).ok);
+    const saved = await request('/posts', 'POST', author, { body: 'Valid picture test', mediaKey: signed.body.key });
+    assert.equal(saved.status, 201);
+    const feed = await request('/feed/latest');
+    const picture = feed.body.items.find((p: any) => p.id === saved.body.id).mediaUrl;
+    const output = Buffer.from(await (await fetch(picture)).arrayBuffer());
+    const metadata = await sharp(output).metadata();
+    assert.equal(metadata.format, 'jpeg');
+    assert.equal(metadata.width, 480); assert.equal(metadata.height, 640);
+    assert.equal(metadata.exif, undefined); assert.equal(metadata.icc, undefined);
+    assert.equal(metadata.orientation, undefined);
+    assert.ok((await sharp(output).raw().toBuffer()).length > 0);
+  }
 });

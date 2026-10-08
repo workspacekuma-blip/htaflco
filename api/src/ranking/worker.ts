@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { pool } from '../db';
+import { pool, tx } from '../db';
 import { FeaturedCandidate, RisingCandidate, selectFeatured, selectRising } from './score';
 
 /**
@@ -25,11 +25,29 @@ const ELIGIBLE_POST = `p.status = 'published' AND NOT p.sensitive
   AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.target_type = 'post' AND r.target_id = p.id AND r.status = 'open')`;
 
 async function saveSnapshot(kind: string, ids: string[]) {
-  await pool.query(
-    `INSERT INTO ranking_snapshots (kind, computed_at, items) VALUES ($1, now(), $2::jsonb)
-     ON CONFLICT (kind) DO UPDATE SET computed_at = now(), items = EXCLUDED.items`,
-    [kind, JSON.stringify(ids)],
-  );
+  await tx(async (c) => {
+    // Serialize replacement of an existing snapshot, including recovery after downtime.
+    await c.query('SELECT kind FROM ranking_snapshots WHERE kind=$1 FOR UPDATE', [kind]);
+    if (kind === 'featured') {
+      // Recover the last known completed week before replacing a pre-upgrade/stale snapshot.
+      // Never invent winners for weeks when the worker recorded no ranking.
+      await c.query(`INSERT INTO featured_archive(week_start,items)
+        SELECT date_trunc('week',computed_at AT TIME ZONE 'UTC')::date, items
+        FROM ranking_snapshots WHERE kind='featured'
+          AND computed_at < (date_trunc('week',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+        ON CONFLICT(week_start) DO NOTHING`);
+      // Each run durably records this week's latest list. Completed weeks have different keys
+      // and stay frozen, so missing Sunday does not lose the last recorded list.
+      await c.query(`INSERT INTO featured_archive(week_start,items)
+        VALUES(date_trunc('week',now() AT TIME ZONE 'UTC')::date,$1::jsonb)
+        ON CONFLICT(week_start) DO UPDATE SET items=EXCLUDED.items`, [JSON.stringify(ids)]);
+    }
+    await c.query(
+      `INSERT INTO ranking_snapshots (kind, computed_at, items) VALUES ($1, now(), $2::jsonb)
+       ON CONFLICT (kind) DO UPDATE SET computed_at = now(), items = EXCLUDED.items`,
+      [kind, JSON.stringify(ids)],
+    );
+  });
 }
 
 export async function computeFeatured(): Promise<string[]> {
@@ -48,14 +66,6 @@ export async function computeFeatured(): Promise<string[]> {
   }));
   const ids = selectFeatured(candidates, { minVoters: config.featuredMinVoters });
   await saveSnapshot('featured', ids);
-  if (new Date().getUTCDay() === 0) {
-    // Sundays: keep the week's winners in the archive (the last run of the day wins).
-    await pool.query(
-      `INSERT INTO featured_archive (week_start, items) VALUES (date_trunc('week', now())::date, $1::jsonb)
-       ON CONFLICT (week_start) DO UPDATE SET items = EXCLUDED.items`,
-      [JSON.stringify(ids)],
-    );
-  }
   return ids;
 }
 

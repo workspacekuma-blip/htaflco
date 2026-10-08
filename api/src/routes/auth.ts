@@ -13,6 +13,16 @@ export const CRAFTS = ['Art', 'Fashion', 'Music', 'Photography', 'Writing', 'Som
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', 12); // keeps login timing the same for unknown emails
 
+function checkPasswordBytes(password: string) {
+  // bcrypt silently ignores bytes beyond this boundary, including multi-byte characters.
+  const bytes = Buffer.from(password, 'utf8');
+  // Malformed UTF-16 can also fail inside the legacy bcrypt encoder. Reject it before hashing.
+  if (bytes.toString('utf8') !== password) throw new HttpError(400, 'Use valid Unicode characters in your password.');
+  if (bytes.length > 72) {
+    throw new HttpError(400, 'Use a password of at most 72 bytes. Some characters use more than one byte.');
+  }
+}
+
 const registerSchema = z.object({
   email: z.string().email().transform((s) => s.toLowerCase()),
   password: z.string().min(10).max(100),
@@ -25,6 +35,7 @@ export const authRouter = Router();
 
 authRouter.post('/register', limiter, ah(async (req, res) => {
   const b = registerSchema.parse(req.body);
+  checkPasswordBytes(b.password);
   const hash = await bcrypt.hash(b.password, 12);
   const token = randomBytes(24).toString('hex');
   let id: string;
@@ -53,6 +64,7 @@ authRouter.post('/login', limiter, ah(async (req, res) => {
     email: z.string().email().transform((s) => s.toLowerCase()),
     password: z.string().min(1).max(100),
   }).parse(req.body);
+  checkPasswordBytes(password);
   const { rows } = await pool.query('SELECT id, role, status, password_hash FROM users WHERE email = $1', [email]);
   const u = rows[0];
   const ok = await bcrypt.compare(password, u ? u.password_hash : DUMMY_HASH);
