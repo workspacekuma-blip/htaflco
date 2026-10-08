@@ -35,4 +35,10 @@ Human moderation was explicitly approved; this is not automated unsafe-content s
 
 ## Deployment checks
 
-Backend commit `2b31b1d` reached Live on Render Free, deployment `dep-db42ic0473hc73ce63ig`, using the approved storage environment. Fresh HTTPS checks through Netlify passed health 200, manual media config (pictures/videos enabled, pending review required), current prompt 200 with none scheduled, anonymous notifications/moderation 401 and forged-Origin posting 403. The frontend and final Unicode transport correction are published afterward; their final checks are appended when completed.
+Final code commit `6d136ff` reached **Live on Render Free**, deployment `dep-db42m47lot8c73cgiosg`, and **Published on Netlify**, deployment `6ac82af3e17b9a000825b0fe`. Render's deployment logs confirm a successful typecheck/build and zero dependency vulnerabilities, using the owner-approved storage environment. No paid plan was activated.
+
+Fresh HTTPS checks through `https://htaflco.netlify.app/api` passed health 200, manual media config (pictures/videos enabled, pending review required), current prompt 200 with none scheduled, anonymous notifications/moderation 401 and forged-Origin posting 403. A 10,000-character Unicode POST without authentication reached the members-only gate (401), proving the deployed parser accepts its size without creating a post. Oversized and malformed bodies returned 413 and 400.
+
+The authenticated live browser showed four actual Latest posts, each with a heading link, one-line preview and response label. Opening an existing post reached its complete-text page and comment input. Notifications finished loading with the default email checkbox unchecked and an empty inbox; Moderation displayed weekly scheduling and the media-review queue without an error. No production preferences, prompts, posts, comments or review decisions were changed for these checks.
+
+Full picture/video upload, transcoding, moderator approval and reply-email delivery were verified locally, **not end to end on Render**. The separate Supabase signed-upload/read/range/security checks above establish provider storage compatibility, but do not substitute for those production flows. No new production reply email was sent. The remaining production acceptance check should use a real member's intended media post and reply, rather than seed content.
