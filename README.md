@@ -91,6 +91,7 @@ For this verification, MinIO could not be used: Docker is absent and its officia
 
 ## Turn on email
 Set `SMTP_URL` (for example `smtp://user:pass@smtp.yourprovider.com:587`) and `MAIL_FROM` in `api/.env`.
+For STARTTLS, include `?requireTLS=true`. Without SMTP, local development prints verification links; production registration returns 503 before creating an account and never prints a verification token. Render Free blocks ports 25, 465 and 587. The owner approved Brevo Free (300 sends/day) on port 2525; its activation and live delivery test remain pending. mail.com remains the contact inbox, not the production SMTP relay.
 
 ## Pages in the website
 `/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
@@ -102,7 +103,7 @@ Every Featured computation atomically saves both the current ranking and that we
 ## Put it on the internet (outline)
 - Host `web/` on a Next.js host. Host `api/` on any Node host. Use a managed PostgreSQL database.
 - Set on the API: `NODE_ENV=production`, a strong `JWT_SECRET`, `APP_ORIGIN` as your real site address, `TRUST_PROXY=1`, and the database URL. Set on the web app: `API_URL` as your API address.
-- Run `npm run rank` as a separate always-on process.
+- Run `npm run rank` separately on an always-on host, or `npm run start:hosted` on the approved single Render Free web instance. The latter starts rankings before accepting traffic and closes the HTTP server, worker and database pool on shutdown.
 - Serve everything over HTTPS only.
 
 ## Still to do before launch
@@ -141,4 +142,4 @@ SMTP delivery, production hosting/HTTPS cookies, a real S3 provider, image scann
 
 Production picture publishing is disabled until an unsafe-content scanner is integrated. Storage policy templates, private quarantine preparation and legacy-password recovery requirements are documented in [api/storage/README.md](api/storage/README.md). The read-only inventory command is npm run legacy:audit in api/. Preparation never updates post URLs or passwords.
 
-The requested Netlify address is https://htaflco.netlify.app. Build settings and the hosted API/database prerequisites are in [verification/NETLIFY.md](verification/NETLIFY.md). Netlify builds refuse a missing or non-HTTPS API_URL rather than publishing a broken localhost proxy. Backend hosting remains to be chosen.
+The requested Netlify address is https://htaflco.netlify.app. Build settings and the hosted API/database prerequisites are in [verification/NETLIFY.md](verification/NETLIFY.md). Netlify builds refuse a missing or non-HTTPS API_URL rather than publishing a broken localhost proxy. The owner approved Supabase Free and Render Free; current setup and exact commands are in [verification/BACKEND.md](verification/BACKEND.md). No paid backend plan is configured in `render.yaml`.

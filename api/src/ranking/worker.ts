@@ -102,9 +102,10 @@ export async function runOnce(withFeatured: boolean) {
   await computeRising(featured);
 }
 
-// Run as a loop: Rising every minute, Featured every five minutes.
-if (require.main === module) {
+// Single-instance loop: skip overlapping ticks and finish active work before shutdown.
+export function startRankingLoop() {
   let tick = 0;
+  let current: Promise<void> | undefined;
   const run = async () => {
     try {
       await runOnce(tick % 5 === 0);
@@ -113,6 +114,19 @@ if (require.main === module) {
     }
     tick++;
   };
-  void run();
-  setInterval(run, 60_000);
+  const start = () => {
+    if (current) return;
+    current = run().finally(() => { current = undefined; });
+  };
+  start();
+  const interval = setInterval(start, 60_000);
+  return async () => { clearInterval(interval); await current; };
+}
+
+// Run separately locally, or share the free web instance through hosted.ts.
+if (require.main === module) {
+  const stop = startRankingLoop();
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(signal, () => { void stop().then(() => pool.end()); });
+  }
 }

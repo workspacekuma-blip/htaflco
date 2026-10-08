@@ -1,10 +1,18 @@
 import nodemailer from 'nodemailer';
 import { config } from './config';
+import { HttpError } from './http';
 
 const transport = config.smtpUrl ? nodemailer.createTransport(config.smtpUrl) : null;
 
+export function requireVerificationDelivery(): void {
+  if (config.isProd && !transport) {
+    throw new HttpError(503, 'Registration is temporarily unavailable while verification email is being configured.');
+  }
+}
+
 /** Sends the verification email. Without SMTP_URL it just prints the link (fine for local work). */
 export async function sendVerification(to: string, token: string): Promise<void> {
+  requireVerificationDelivery();
   const link = `${config.appOrigin}/verify?token=${token}`;
   if (!transport) {
     console.log(`[mail not configured] Verify link for ${to}: ${link}`);

@@ -1,0 +1,33 @@
+# One free instance. Database is the separately provisioned Supabase Free project.
+services:
+  - type: web
+    name: htaflco-api
+    runtime: node
+    plan: free
+    region: frankfurt
+    repo: https://github.com/workspacekuma-blip/htaflco
+    branch: main
+    rootDir: api
+    buildCommand: npm ci --include=dev && npm run typecheck && npm run build
+    startCommand: npm run start:hosted
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: APP_ORIGIN
+        value: https://htaflco.netlify.app
+      - key: REQUIRE_VERIFIED_EMAIL
+        value: 'true'
+      - key: TRUST_PROXY
+        value: 1
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false

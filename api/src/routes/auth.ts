@@ -4,7 +4,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { Authed, clearSession, perUser, requireAuth, signSession } from '../auth';
-import { sendVerification } from '../mailer';
+import { requireVerificationDelivery, sendVerification } from '../mailer';
 import { pool, tx } from '../db';
 import { ah, HttpError } from '../http';
 
@@ -36,6 +36,7 @@ export const authRouter = Router();
 authRouter.post('/register', limiter, ah(async (req, res) => {
   const b = registerSchema.parse(req.body);
   checkPasswordBytes(b.password);
+  requireVerificationDelivery();
   const hash = await bcrypt.hash(b.password, 12);
   const token = randomBytes(24).toString('hex');
   let id: string;
@@ -89,6 +90,7 @@ authRouter.get('/verify', ah(async (req, res) => {
 }));
 
 authRouter.post('/resend-verification', requireAuth, perUser(5, 3600_000), ah(async (req, res) => {
+  requireVerificationDelivery();
   const token = randomBytes(24).toString('hex');
   const { rows } = await pool.query(
     'UPDATE users SET verify_token = $1 WHERE id = $2 AND NOT email_verified RETURNING email',

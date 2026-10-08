@@ -74,6 +74,28 @@ async function counters(id: string) {
 test('health connects to real PostgreSQL', async () => {
   assert.deepEqual(await request('/health'), { status: 200, body: { ok: true } });
 });
+test('shared free host starts API and rankings and closes database connections', async () => {
+  const result = await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
+    const assert=require('node:assert/strict');
+    const {startHostedServer}=require('./src/hosted'); const {pool}=require('./src/db');
+    (async()=>{
+      const host=await startHostedServer(0,'127.0.0.1');
+      try {
+        const base='http://127.0.0.1:'+host.server.address().port;
+        assert.equal((await fetch(base+'/health')).status,200);
+        assert.equal((await fetch(base+'/posts',{method:'POST',headers:{origin:process.env.APP_ORIGIN,'content-type':'application/json'},body:'{}'})).status,401);
+        assert.equal((await fetch(base+'/posts',{method:'POST',headers:{origin:'https://evil.example','content-type':'application/json'},body:'{}'})).status,403);
+        const signup=await fetch(base+'/auth/register',{method:'POST',headers:{origin:process.env.APP_ORIGIN,'content-type':'application/json'},body:JSON.stringify({email:'hosted@example.test',password:'hosted-test-password',displayName:'Hosted test',agree:true})});
+        assert.equal(signup.status,503);
+        assert.equal((await pool.query("SELECT count(*)::int AS n FROM users WHERE email='hosted@example.test'")).rows[0].n,0);
+        assert.deepEqual((await pool.query('SELECT kind FROM ranking_snapshots ORDER BY kind')).rows.map(r=>r.kind),['featured','rising']);
+      } finally {await host.close()}
+      assert.equal(pool.ended,true); console.log('shared host verified');
+    })().catch(e=>{console.error(e);process.exit(1)});
+  `], { env: { ...process.env, NODE_ENV: 'production', SMTP_URL: '' }, timeout: 15000 });
+  assert.match(result.stdout, /shared host verified/);
+  assert.doesNotMatch(result.stdout, /verify\?token=/);
+});
 test('production picture publishing stays disabled until a scanning provider is implemented', async () => {
   await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
     const assert=require('node:assert/strict'); const media=require('./src/media');
