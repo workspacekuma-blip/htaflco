@@ -1,6 +1,10 @@
 # Production storage preparation
 
-These are review templates, not applied policies. No production provider or unsafe-content scanner has been selected. `NODE_ENV=production` disables picture publishing in both the configuration endpoint and upload/attachment functions. There is deliberately no environment switch to bypass scanning. Existing picture URLs are not hidden by this guard; their storage access must be reviewed separately.
+The owner selected **Supabase Free private storage and human moderation** for new pictures/videos. `MEDIA_REVIEW_MODE=manual` enables this reviewed flow only when storage credentials exist; otherwise production uploads remain disabled. Sharp/FFmpeg validate encoding, not content safety. No automated unsafe-content scanner is integrated. Existing legacy URLs are unchanged and still require separate review.
+
+The production `htafl-media` bucket is private, capped at 10 MB and limited to JPEG/PNG/WebP/MP4. No anonymous/authenticated storage policies are required because this application uses its own accounts. Supabase S3 access keys bypass RLS and access all project buckets: keep them only in the backend environment. `uploads/` and `validated/` stay private. The API serves attached objects only after a fresh visibility/ownership/moderator check, including Range and HEAD. Browser signed PUTs cannot write `validated/`. Every new media post waits for explicit moderator approval. Staging and unattached files older than a day are cleaned by the hosted worker; attached validated objects are retained. Idle Render sleep delays this cleanup. Free quota/egress monitoring is an operational requirement.
+
+The AWS JSON files below remain **unapplied reference templates** for another provider. They are not the policy used by Supabase and do not describe its broad S3-key permissions. Legacy audit/quarantine commands remain preparation-only; no migration, password reset or scanner submission is performed automatically.
 
 ## Storage contract
 

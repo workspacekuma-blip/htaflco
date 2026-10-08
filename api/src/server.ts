@@ -10,6 +10,8 @@ import { feedsRouter } from './routes/feeds';
 import { postsRouter } from './routes/posts';
 import { mediaRouter } from './routes/media';
 import { reportsRouter } from './routes/reports';
+import { promptsRouter } from './routes/prompts';
+import { notificationsRouter } from './routes/notifications';
 
 export const app = express();
 app.disable('x-powered-by');
@@ -40,6 +42,8 @@ app.use('/feed', feedsRouter);
 app.use(postsRouter);
 app.use(mediaRouter);
 app.use(reportsRouter);
+app.use(promptsRouter);
+app.use(notificationsRouter);
 app.use(errorHandler);
 
 if (require.main === module) {

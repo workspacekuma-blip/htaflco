@@ -3,6 +3,8 @@ import { app } from './server';
 import { config } from './config';
 import { pool } from './db';
 import { runOnce, startRankingLoop } from './ranking/worker';
+import { startReplyEmailLoop } from './reply-emails';
+import { startMediaCleanupLoop } from './private-media';
 
 export async function startHostedServer(port = config.port, host = '0.0.0.0') {
   // Do not accept traffic before the database schema and first ranking run succeed.
@@ -12,10 +14,14 @@ export async function startHostedServer(port = config.port, host = '0.0.0.0') {
     server.once('listening', resolve); server.once('error', reject);
   });
   const stopRanking = startRankingLoop();
+  const stopEmails = startReplyEmailLoop();
+  const stopMedia = startMediaCleanupLoop();
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
     await new Promise<void>((resolve, reject) => server.close((e) => e ? reject(e) : resolve()));
     await stopRanking();
+    await stopEmails();
+    await stopMedia();
     await pool.end();
   })();
   return { server, close };

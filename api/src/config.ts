@@ -18,6 +18,9 @@ export const config = {
   appOrigin: process.env.APP_ORIGIN ?? 'http://localhost:3001',
   smtpUrl: process.env.SMTP_URL ?? '',
   mailFrom: process.env.MAIL_FROM ?? 'HTAFL <no-reply@example.com>',
+  // Reserve most of Brevo Free's daily allowance for account verification.
+  replyEmailDailyLimit: Math.min(100, Math.max(0, Number(process.env.REPLY_EMAIL_DAILY_LIMIT ?? 100) || 0)),
+  mediaReviewMode: process.env.MEDIA_REVIEW_MODE ?? '',
   s3Endpoint: process.env.S3_ENDPOINT ?? '',
   s3Region: process.env.S3_REGION ?? 'auto',
   s3Bucket: process.env.S3_BUCKET ?? '',

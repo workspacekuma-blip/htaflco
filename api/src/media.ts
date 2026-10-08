@@ -5,33 +5,38 @@ import type { Readable } from 'node:stream';
 import sharp from 'sharp';
 import { config } from './config';
 import { HttpError } from './http';
+import { pool } from './db';
 
 export const storageConfigured = Boolean(
-  config.s3Bucket && config.s3AccessKeyId && config.s3SecretAccessKey && config.s3PublicBase,
+  config.s3Bucket && config.s3AccessKeyId && config.s3SecretAccessKey,
 );
 // No unsafe-content provider has been selected. Never publish unscanned production pictures.
 export const mediaEnabled = storageConfigured && !config.isProd;
+export const manualReview = () => config.mediaReviewMode === 'manual';
+export const isMediaEnabled = () => storageConfigured && (manualReview() || !config.isProd);
 export const MAX_BYTES = 2_000_000;
 const MAX_PIXELS = 16_000_000;
 const TYPES: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const FORMATS: Record<string, string> = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
 
-const s3 = storageConfigured
+export const s3 = storageConfigured
   ? new S3Client({
       region: config.s3Region,
       endpoint: config.s3Endpoint || undefined,
       forcePathStyle: Boolean(config.s3Endpoint),
+      requestHandler: { connectionTimeout: 5_000, requestTimeout: 15_000 },
       credentials: { accessKeyId: config.s3AccessKeyId, secretAccessKey: config.s3SecretAccessKey },
     })
   : null;
 
 /** A short-lived link the browser uses to upload one picture straight to storage. */
 export async function presignUpload(userId: string, contentType: string) {
-  if (config.isProd) throw new HttpError(503, 'Picture publishing is pending production scanning setup.');
+  if (config.isProd && !manualReview()) throw new HttpError(503, 'Media publishing is pending production review setup.');
   if (!s3) throw new HttpError(501, 'Picture upload is not set up');
-  const ext = TYPES[contentType];
-  if (!ext) throw new HttpError(400, 'Use a JPEG, PNG or WebP picture');
+  const ext = TYPES[contentType] ?? (manualReview() && contentType === 'video/mp4' ? 'mp4' : undefined);
+  if (!ext) throw new HttpError(400, 'Use a JPEG, PNG, WebP picture or MP4 video');
   const key = `uploads/${userId}/${randomUUID()}.${ext}`;
+  if (manualReview()) await pool.query('INSERT INTO post_media(owner_id,source_key,kind) VALUES($1,$2,$3)', [userId, key, ext === 'mp4' ? 'video' : 'picture']);
   const url = await getSignedUrl(
     s3,
     new PutObjectCommand({ Bucket: config.s3Bucket, Key: key, ContentType: contentType }),
@@ -40,14 +45,14 @@ export async function presignUpload(userId: string, contentType: string) {
   return { key, url };
 }
 
-async function readBytes(stream: Readable): Promise<Buffer> {
+export async function readBytes(stream: Readable, maxBytes = MAX_BYTES): Promise<Buffer> {
   try {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of stream) {
       const b = Buffer.from(chunk);
       size += b.length;
-      if (size > MAX_BYTES) throw new HttpError(400, 'That picture is too large');
+      if (size > maxBytes) throw new HttpError(400, 'That attachment is too large');
       chunks.push(b);
     }
     return Buffer.concat(chunks);

@@ -2,14 +2,18 @@ import { pool } from './db';
 
 /** Base query for post lists. $1 = viewer id (or null) so each post can show the viewer's own vote. */
 export const POST_SELECT = `
-  SELECT p.id, p.body, p.media_url AS "mediaUrl", p.pillar, p.craft,
+  SELECT p.id, p.title, p.body, p.response_label AS "responseLabel", p.media_url AS "mediaUrl", p.pillar, p.craft,
+         p.challenge_id AS "promptId", wp.title AS "promptTitle", p.status,
+         m.kind AS "mediaKind", p.media_alt AS "mediaAlt",
          p.created_at AS "createdAt", p.edited_at AS "editedAt",
          p.up, p.down, (p.up - p.down) AS score, p.comment_count AS "commentCount",
          pr.display_name AS author,
          (SELECT v.value FROM votes v WHERE v.post_id = p.id AND v.user_id = $1::uuid) AS "myVote",
          to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "cursorAt"
     FROM posts p
-    JOIN profiles pr ON pr.user_id = p.author_id`;
+    JOIN profiles pr ON pr.user_id = p.author_id
+    LEFT JOIN weekly_prompts wp ON wp.id = p.challenge_id
+    LEFT JOIN post_media m ON m.id = p.media_id`;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -43,10 +47,12 @@ export async function feedPage(
   filters: { sql: string; value: unknown }[],
   rawCursor: unknown,
   rawLimit: unknown,
+  ownWall = false,
 ) {
   const limit = Math.min(Math.max(Number(rawLimit) || 20, 1), 50);
   const params: unknown[] = [viewerId];
-  const where = [`p.status = 'published'`];
+  // This option is used only by the authenticated own-wall route, never by public feeds.
+  const where = [ownWall ? `p.author_id = $1::uuid AND p.status IN ('published','pending','hidden','removed')` : `p.status = 'published'`];
   for (const f of filters) {
     params.push(f.value);
     where.push(f.sql.replace('?', `$${params.length}`));

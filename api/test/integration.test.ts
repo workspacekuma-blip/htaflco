@@ -45,7 +45,7 @@ after(async () => {
   await pool.end();
 });
 beforeEach(async () => {
-  await pool.query('TRUNCATE users, ranking_snapshots, featured_archive CASCADE');
+  await pool.query('TRUNCATE users, ranking_snapshots, featured_archive, weekly_prompts, reply_email_budget CASCADE');
 });
 async function user(verified = true, role = 'member'): Promise<User> {
   const { rows } = await pool.query(
@@ -64,7 +64,8 @@ async function request(path: string, method = 'GET', u?: User, body?: unknown, o
   const response = await fetch(base + path, { method, headers: {
     origin, 'content-type': 'application/json', ...(u ? { cookie: u.cookie } : {}),
   }, body: body === undefined ? undefined : JSON.stringify(body) });
-  return { status: response.status, body: await response.json() as any };
+  const text = await response.text();
+  return { status: response.status, body: response.headers.get('content-type')?.includes('application/json') ? JSON.parse(text) as any : { error: text } };
 }
 async function vote(id: string, u: User, value: number) { return request(`/posts/${id}/vote`, 'PUT', u, { value }); }
 async function counters(id: string) {
@@ -73,6 +74,220 @@ async function counters(id: string) {
 
 test('health connects to real PostgreSQL', async () => {
   assert.deepEqual(await request('/health'), { status: 200, body: { ok: true } });
+});
+
+test('post headings, response labels and long text survive create, read and author edits', async () => {
+  const author = await user();
+  const body = 'My first line.\n\n' + 'A longer chapter. '.repeat(450) + 'Still going.';
+  const created = await request('/posts', 'POST', author, { title: 'A new beginning', body, responseLabel: 'Constructive feedback' });
+  assert.equal(created.status, 201);
+  const detail = await request(`/posts/${created.body.id}`, 'GET', author);
+  assert.equal(detail.body.title, 'A new beginning');
+  assert.equal(detail.body.body, body);
+  assert.equal(detail.body.responseLabel, 'Constructive feedback');
+  assert.equal((await request(`/posts/${created.body.id}`, 'PATCH', await user(), { title: 'Someone else', body: 'Changed' })).status, 404);
+  assert.equal((await request(`/posts/${created.body.id}`, 'PATCH', author, { title: 'Still creating', body: 'Updated words', responseLabel: 'Encouragement' })).status, 200);
+  const updated = (await request(`/posts/${created.body.id}`)).body;
+  assert.equal(updated.title, 'Still creating');
+  assert.equal(updated.body, 'Updated words');
+  assert.equal(updated.responseLabel, 'Encouragement');
+  // Old clients can edit the body without erasing the heading or label.
+  await request(`/posts/${created.body.id}`, 'PATCH', author, { body: 'Body only' });
+  const retained = (await request('/feed/latest')).body.items[0];
+  assert.equal(retained.title, 'Still creating');
+  assert.equal(retained.responseLabel, 'Encouragement');
+});
+
+test('post limits and response labels are validated and headings receive the distress check', async () => {
+  const author = await user();
+  for (const fields of [{ title: ' ' }, { title: 'x'.repeat(101) }, { body: 'x'.repeat(10001) }, { responseLabel: 'Anything' }]) {
+    assert.equal((await request('/posts', 'POST', author, { body: 'Words', ...fields })).status, 400);
+  }
+  const sensitive = await request('/posts', 'POST', author, { title: "I don't want to live", body: 'I am still making something' });
+  assert.equal(sensitive.status, 201);
+  assert.equal(sensitive.body.supportNotice, true);
+  const legacy = await request('/posts', 'POST', author, { body: 'No heading supplied' });
+  assert.equal(legacy.status, 201);
+  const detail = (await request(`/posts/${legacy.body.id}`)).body;
+  assert.equal(detail.title, null);
+  assert.equal(detail.responseLabel, 'Just sharing');
+  assert.equal((await request('/posts', 'POST', author, { body: 'x'.repeat(10000) })).status, 201);
+  assert.equal((await request(`/posts/${legacy.body.id}`, 'PATCH', author, { body: 'x'.repeat(10001) })).status, 400);
+});
+
+test('reply notifications are private, durable and only created for another member replying', async () => {
+  const author = await user(); const other = await user(); const stranger = await user();
+  const id = await post(author);
+  assert.equal((await request('/me/notifications', 'GET', author)).status, 200);
+  assert.equal((await request(`/posts/${id}/comments`, 'POST', other, { body: 'A thoughtful reply' })).status, 201);
+  await request(`/posts/${id}/comments`, 'POST', author, { body: 'My own follow-up' });
+  const inbox = await request('/me/notifications', 'GET', author);
+  assert.equal(inbox.body.items.length, 1);
+  assert.equal(inbox.body.unreadCount, 1);
+  assert.equal(inbox.body.items[0].postId, id);
+  assert.equal(inbox.body.items[0].body, 'A thoughtful reply');
+  assert.equal(inbox.body.items[0].readAt, null);
+  assert.equal((await request('/me/notifications', 'GET', other)).body.items.length, 0);
+  assert.equal((await request('/me/notifications')).status, 401);
+  const notification = inbox.body.items[0].id;
+  assert.equal((await request(`/me/notifications/${notification}/read`, 'POST', stranger)).status, 404);
+  assert.equal((await request(`/me/notifications/${notification}/read`, 'POST', author)).status, 200);
+  assert.equal((await request('/me/notifications', 'GET', author)).body.unreadCount, 0);
+  assert.equal((await request(`/me/notifications/${notification}/read`, 'POST', author, undefined, 'https://forged.example')).status, 403);
+  await pool.query("UPDATE users SET status='suspended' WHERE id=$1", [author.id]);
+  assert.equal((await request('/me/notifications', 'GET', author)).status, 403);
+});
+
+test('hidden replies and posts vanish from notifications and their unread counts', async () => {
+  const author = await user(); const other = await user(); const id = await post(author);
+  assert.equal((await request('/me/notifications', 'GET', author)).status, 200);
+  const reply = await request(`/posts/${id}/comments`, 'POST', other, { body: 'Reply' });
+  await pool.query("UPDATE comments SET status='hidden' WHERE id=$1", [reply.body.id]);
+  assert.deepEqual((await request('/me/notifications', 'GET', author)).body.items, []);
+  assert.equal((await request('/me/notifications', 'GET', author)).body.unreadCount, 0);
+  await pool.query("UPDATE comments SET status='published' WHERE id=$1", [reply.body.id]);
+  await pool.query("UPDATE posts SET status='hidden' WHERE id=$1", [id]);
+  assert.equal((await request('/me/notifications', 'GET', author)).body.items.length, 0);
+  await pool.query('DELETE FROM posts WHERE id=$1', [id]);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM reply_notifications')).rows[0].n, 0);
+});
+
+test('reply email defaults off, records opt-in and cancels pending delivery on opt-out', async () => {
+  const author = await user(); const other = await user(); const id = await post(author);
+  const preferences = await request('/me/notification-preferences', 'GET', author);
+  assert.equal(preferences.status, 200);
+  assert.equal(preferences.body.replyEmail, false);
+  await request(`/posts/${id}/comments`, 'POST', other, { body: 'In-app only' });
+  assert.equal((await pool.query('SELECT email_status FROM reply_notifications')).rows[0].email_status, 'none');
+  assert.equal((await request('/me/notification-preferences', 'PATCH', author, { replyEmail: true })).status, 200);
+  assert.ok((await pool.query('SELECT reply_email_consented_at FROM users WHERE id=$1', [author.id])).rows[0].reply_email_consented_at);
+  await request(`/posts/${id}/comments`, 'POST', other, { body: 'Email opted in' });
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM reply_notifications WHERE email_status='pending'")).rows[0].n, 1);
+  assert.equal((await request('/me/notification-preferences', 'PATCH', author, { replyEmail: false })).status, 200);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM reply_notifications WHERE email_status='pending'")).rows[0].n, 0);
+  assert.equal((await request('/me/notification-preferences', 'PATCH', author, { replyEmail: 'yes' })).status, 400);
+  assert.equal((await request('/me/notification-preferences', 'PATCH', await user(false), { replyEmail: true })).status, 403);
+});
+
+test('reply unsubscribe links cannot create sessions and only change email preferences after a POST', async () => {
+  const author = await user();
+  await request('/me/notification-preferences', 'PATCH', author, { replyEmail: true });
+  const { replyUnsubscribeToken } = require('../src/reply-emails') as typeof import('../src/reply-emails');
+  const token = replyUnsubscribeToken(author.id);
+  assert.equal((await request('/auth/me', 'GET', { id: author.id, cookie: `htafl_session=${token}` })).status, 401);
+  await request('/notifications/email-unsubscribe?token=' + token);
+  assert.equal((await request('/me/notification-preferences', 'GET', author)).body.replyEmail, true);
+  assert.equal((await request('/notifications/email-unsubscribe', 'POST', undefined, { token: token + 'x' })).status, 400);
+  assert.equal((await request('/notifications/email-unsubscribe', 'POST', undefined, { token })).status, 200);
+  assert.equal((await request('/me/notification-preferences', 'GET', author)).body.replyEmail, false);
+});
+
+test('SMTP outbox sends only opted-in replies, omits personal text and enforces its daily free-tier budget', async () => {
+  const author = await user(); const other = await user(); const id = await post(author, 'SECRET_STORY');
+  await pool.query("UPDATE posts SET title='SECRET_HEADING' WHERE id=$1", [id]);
+  await request('/me/notification-preferences', 'PATCH', author, { replyEmail: true });
+  await request(`/posts/${id}/comments`, 'POST', other, { body: 'SECRET_REPLY' });
+  await request(`/posts/${id}/comments`, 'POST', other, { body: 'Another reply' });
+  const script = `
+    const assert=require('node:assert/strict'); const net=require('node:net'); let messages=[];
+    const smtp=net.createServer(socket=>{let input='',data=false;socket.write('220 localhost SMTP\\r\\n');socket.on('data',chunk=>{
+      input+=chunk.toString(); while(input.includes('\\r\\n')) {
+        if(data){const end=input.indexOf('\\r\\n.\\r\\n'); if(end<0)return;messages.push(input.slice(0,end));input=input.slice(end+5);data=false;socket.write('250 accepted\\r\\n');continue;}
+        const end=input.indexOf('\\r\\n');const line=input.slice(0,end);input=input.slice(end+2);
+        if(line.startsWith('EHLO')||line.startsWith('HELO'))socket.write('250 localhost\\r\\n');
+        else if(line==='DATA'){data=true;socket.write('354 send data\\r\\n');}
+        else if(line==='QUIT'){socket.end('221 bye\\r\\n');}
+        else socket.write('250 OK\\r\\n');
+      }
+    });});
+    (async()=>{
+      await new Promise(resolve=>smtp.listen(0,'127.0.0.1',resolve));process.env.SMTP_URL='smtp://127.0.0.1:'+smtp.address().port;process.env.REPLY_EMAIL_DAILY_LIMIT='1';
+      const {processReplyEmails}=require('./src/reply-emails');const {pool}=require('./src/db');
+      try {await Promise.all([processReplyEmails(),processReplyEmails()]);assert.equal(messages.length,1);assert.ok(messages[0].includes('/posts/'));
+        assert.ok(!messages[0].includes('SECRET_STORY')&&!messages[0].includes('SECRET_HEADING')&&!messages[0].includes('SECRET_REPLY'));
+        assert.ok(messages[0].includes('/notifications/unsubscribe?'));console.log('SMTP delivery and budget verified');
+      } finally {await pool.end();await new Promise(resolve=>smtp.close(resolve));}
+    })().catch(e=>{console.error(e);process.exitCode=1});
+  `;
+  const result = await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', script], { env: { ...process.env }, timeout: 25000 });
+  assert.match(result.stdout, /SMTP delivery and budget verified/);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM reply_notifications WHERE email_status='sent'")).rows[0].n, 1);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM reply_notifications WHERE email_status='pending'")).rows[0].n, 1);
+});
+
+test('SMTP failures remain retryable and an exhausted restart claim becomes failed', async () => {
+  const author = await user(); const other = await user(); const id = await post(author);
+  await request('/me/notification-preferences', 'PATCH', author, { replyEmail: true });
+  await request(`/posts/${id}/comments`, 'POST', other, { body: 'Reply needing recovery' });
+  const result = await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
+    const net=require('node:net');(async()=>{const smtp=net.createServer(s=>s.end('421 Temporary failure\\r\\n'));
+    await new Promise(r=>smtp.listen(0,'127.0.0.1',r));process.env.SMTP_URL='smtp://127.0.0.1:'+smtp.address().port;
+    const {processReplyEmails}=require('./src/reply-emails');const {pool}=require('./src/db');
+    try{await processReplyEmails()}finally{await pool.end();await new Promise(r=>smtp.close(r))}})().catch(e=>{console.error(e);process.exit(1)});
+  `], { env: { ...process.env }, timeout: 15000 });
+  assert.match(result.stderr, /Reply email delivery failed/);
+  const pending = (await pool.query('SELECT email_status,email_attempts,email_next_at>now() AS deferred FROM reply_notifications')).rows[0];
+  assert.deepEqual(pending, { email_status: 'pending', email_attempts: 1, deferred: true });
+  await pool.query("UPDATE reply_notifications SET email_status='sending',email_attempts=5,email_attempted_at=now()-interval '20 minutes'");
+  await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
+    process.env.SMTP_URL='smtp://127.0.0.1:1'; const {processReplyEmails}=require('./src/reply-emails');const {pool}=require('./src/db');
+    processReplyEmails().finally(()=>pool.end()).catch(e=>{console.error(e);process.exitCode=1});
+  `], { env: { ...process.env }, timeout: 15000 });
+  assert.equal((await pool.query('SELECT email_status FROM reply_notifications')).rows[0].email_status, 'failed');
+});
+
+test('notifications use stable keyset pagination without duplicates', async () => {
+  const author = await user(); const other = await user(); const id = await post(author);
+  assert.equal((await request('/me/notifications', 'GET', author)).status, 200);
+  for (let i = 0; i < 7; i++) await request(`/posts/${id}/comments`, 'POST', other, { body: `Reply ${i}` });
+  const seen: string[] = []; let cursor: string | null = null;
+  do {
+    const page = await request('/me/notifications?limit=2' + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''), 'GET', author);
+    seen.push(...page.body.items.map((n: { id: string }) => n.id));
+    cursor = page.body.nextCursor;
+  } while (cursor);
+  assert.equal(seen.length, 7);
+  assert.equal(new Set(seen).size, 7);
+});
+
+test('only moderators schedule UTC Monday prompts and posts can join only the current week', async () => {
+  const mod = await user(true, 'moderator'); const member = await user();
+  assert.equal((await request('/prompts/current')).status, 200);
+  const dates = (await pool.query("SELECT date_trunc('week',now() AT TIME ZONE 'UTC')::date::text AS current, (date_trunc('week',now() AT TIME ZONE 'UTC')::date+7)::text AS future, (date_trunc('week',now() AT TIME ZONE 'UTC')::date-7)::text AS past")).rows[0];
+  const prompt = { weekStart: dates.current, title: 'Starting again', body: 'Make something that represents a new beginning.' };
+  assert.equal((await request('/admin/prompts', 'POST', member, prompt)).status, 403);
+  assert.equal((await request('/admin/prompts', 'POST', undefined, prompt)).status, 401);
+  assert.equal((await request('/admin/prompts', 'POST', mod, { ...prompt, weekStart: dates.past })).status, 400);
+  assert.equal((await request('/admin/prompts', 'POST', mod, { ...prompt, weekStart: '2026-10-08' })).status, 400);
+  const current = await request('/admin/prompts', 'POST', mod, prompt);
+  assert.equal(current.status, 201);
+  const future = await request('/admin/prompts', 'POST', mod, { ...prompt, weekStart: dates.future, title: 'Next week' });
+  assert.equal(future.status, 201);
+  assert.equal((await request('/prompts/current')).body.prompt.id, current.body.id);
+  const joined = await request('/posts', 'POST', member, { title: 'My first step', body: 'A response to this week', promptId: current.body.id });
+  assert.equal(joined.status, 201);
+  const detail = (await request(`/posts/${joined.body.id}`)).body;
+  assert.equal(detail.promptId, current.body.id);
+  assert.equal(detail.promptTitle, 'Starting again');
+  assert.equal((await request('/posts', 'POST', member, { body: 'Too early', promptId: future.body.id })).status, 400);
+  assert.equal((await request('/posts', 'POST', member, { body: 'Unknown', promptId: '00000000-0000-4000-8000-000000000001' })).status, 400);
+  assert.equal((await request('/feed/browse?challenge=' + current.body.id)).body.items.length, 1);
+});
+
+test('prompt rollover and empty weeks depend on database time, with no running scheduler', async () => {
+  const mod = await user(true, 'admin');
+  assert.equal((await request('/prompts/current')).status, 200);
+  assert.equal((await request('/prompts/current')).body.prompt, null);
+  const week = (await pool.query("SELECT date_trunc('week',now() AT TIME ZONE 'UTC')::date::text AS d")).rows[0].d;
+  const r = await request('/admin/prompts', 'POST', mod, { weekStart: week, title: 'A small step', body: 'Make one thing.' });
+  assert.equal(r.status, 201);
+  await pool.query('UPDATE weekly_prompts SET week_start=week_start-7 WHERE id=$1', [r.body.id]);
+  assert.equal((await request('/prompts/current')).body.prompt, null);
+  await pool.query('UPDATE weekly_prompts SET week_start=week_start+7 WHERE id=$1', [r.body.id]);
+  assert.equal((await request('/prompts/current')).body.prompt.id, r.body.id);
+  const updated = await request('/admin/prompts', 'POST', mod, { weekStart: week, title: 'A revised small step', body: 'Make a little thing.' });
+  assert.equal(updated.body.id, r.body.id);
+  assert.equal((await request('/admin/prompts', 'GET', mod)).body.items.length, 1);
 });
 test('verification signs a signed-out member in and permits participation', async () => {
   const member = await user(false);
@@ -369,6 +584,86 @@ test('distress notice is retained and hidden post comments are not publicly expo
   await request(`/posts/${r.body.id}/comments`, 'POST', author, { body: 'Private after hiding' });
   await pool.query("UPDATE posts SET status='hidden' WHERE id=$1", [r.body.id]);
   assert.equal((await request(`/posts/${r.body.id}/comments`)).status, 404);
+});
+
+test('private media waits for human review, serves ranges, and cannot be overwritten or reused', {
+  skip: !/^http:\/\/(localhost|127\.0\.0\.1):9000$/.test(process.env.S3_ENDPOINT ?? ''),
+}, async () => {
+  const { config } = require('../src/config') as typeof import('../src/config');
+  const old = config.mediaReviewMode; config.mediaReviewMode = 'manual';
+  try {
+    const author = await user(); const other = await user(); const moderator = await user(true, 'moderator');
+    const signed = await request('/media/upload-url', 'POST', author, { contentType: 'image/png' });
+    assert.equal(signed.status, 200);
+    assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: readFileSync('../scripts/fixtures/upload-test.png') })).ok);
+    assert.equal((await request('/posts', 'POST', other, { body: 'Stolen', mediaKey: signed.body.key })).status, 400);
+    const created = await request('/posts', 'POST', author, { title: 'Private fixture', body: 'Awaiting a human look', mediaKey: signed.body.key, mediaAlt: 'Blue test square' });
+    assert.equal(created.status, 201); assert.equal(created.body.pendingReview, true);
+    const id = created.body.id;
+    assert.equal((await request(`/posts/${id}`)).status, 404);
+    assert.equal((await request('/feed/latest')).body.items.length, 0);
+    const mine = (await request('/me/wall', 'GET', author)).body.items[0];
+    assert.equal(mine.status, 'pending'); assert.equal(mine.mediaKind, 'picture');
+    const mediaPath = new URL(mine.mediaUrl).pathname.replace(/^\/api/, '');
+    assert.equal((await fetch(base + mediaPath)).status, 404);
+    const privatePicture = await fetch(base + mediaPath, { headers: { cookie: author.cookie } });
+    assert.equal(privatePicture.status, 200);
+    const immutable = Buffer.from(await privatePicture.arrayBuffer());
+    assert.equal((await request('/admin/media-pending', 'GET', other)).status, 403);
+    assert.equal((await request('/admin/media-pending', 'GET', moderator)).body.items[0].id, id);
+    assert.equal((await request(`/admin/posts/${id}/status`, 'POST', moderator, { status: 'published' })).status, 409);
+    assert.equal((await request(`/admin/posts/${id}/approve-media`, 'POST', other)).status, 403);
+    assert.equal((await request(`/admin/posts/${id}/approve-media`, 'POST', moderator)).status, 200);
+    assert.equal((await request(`/posts/${id}`)).status, 200);
+    assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: Buffer.from('replacement') })).ok);
+    assert.deepEqual(Buffer.from(await (await fetch(base + mediaPath)).arrayBuffer()), immutable);
+    assert.equal((await request('/posts', 'POST', author, { body: 'Reuse', mediaKey: signed.body.key })).status, 400);
+    const range = await fetch(base + mediaPath, { headers: { range: 'bytes=0-2' } });
+    assert.equal(range.status, 206); assert.deepEqual([...new Uint8Array(await range.arrayBuffer())], [255,216,255]);
+    assert.equal((await fetch(base + mediaPath, { headers: { range: 'bytes=99999999-' } })).status, 416);
+    await request(`/admin/posts/${id}/status`, 'POST', moderator, { status: 'hidden' });
+    assert.equal((await fetch(base + mediaPath)).status, 404);
+    // An old JWT role must not keep moderation access after demotion.
+    await pool.query("UPDATE users SET role='member' WHERE id=$1", [moderator.id]);
+    assert.equal((await fetch(base + mediaPath, { headers: { cookie: moderator.cookie } })).status, 404);
+  } finally { config.mediaReviewMode = old; }
+});
+
+test('MP4 uploads recover interrupted processing, remain private until approval, and clean only expired staging', {
+  skip: !/^http:\/\/(localhost|127\.0\.0\.1):9000$/.test(process.env.S3_ENDPOINT ?? ''),
+}, async () => {
+  const { config } = require('../src/config') as typeof import('../src/config');
+  const old = config.mediaReviewMode; config.mediaReviewMode = 'manual';
+  const path = join(tmpdir(), `htafl-test-${randomBytes(8).toString('hex')}.mp4`);
+  try {
+    const ffmpeg = require('ffmpeg-static') as string;
+    await promisify(execFile)(ffmpeg, ['-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=blue:s=160x90:r=10','-f','lavfi','-i','sine=frequency=440','-t','2','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac',path]);
+    const author = await user(); const moderator = await user(true, 'moderator');
+    const signed = await request('/media/upload-url','POST',author,{ contentType:'video/mp4' });
+    assert.equal(signed.status,200);
+    assert.ok((await fetch(signed.body.url,{ method:'PUT',headers:{ 'content-type':'video/mp4' },body:await readFile(path) })).ok);
+    // A crash after claiming an upload is recoverable after five minutes.
+    await pool.query("UPDATE post_media SET state='processing',updated_at=now()-interval '6 minutes' WHERE source_key=$1",[signed.body.key]);
+    const saved = await request('/posts','POST',author,{ title:'Dev video',body:'Only a local test',mediaKey:signed.body.key });
+    assert.equal(saved.status,201); assert.equal(saved.body.pendingReview,true);
+    const mine = (await request('/me/wall','GET',author)).body.items[0];
+    assert.equal(mine.mediaKind,'video');
+    const mediaPath = new URL(mine.mediaUrl).pathname.replace(/^\/api/,'');
+    assert.equal((await fetch(base+mediaPath)).status,404);
+    await request(`/admin/posts/${saved.body.id}/approve-media`,'POST',moderator);
+    const media = await fetch(base+mediaPath);
+    assert.equal(media.headers.get('content-type'),'video/mp4');
+    const valid = Buffer.from(await media.arrayBuffer()); assert.equal(valid.toString('ascii',4,8),'ftyp');
+    await pool.query("UPDATE post_media SET updated_at=now()-interval '2 days' WHERE source_key=$1",[signed.body.key]);
+    const { cleanupUnattachedMedia } = require('../src/private-media') as typeof import('../src/private-media');
+    await cleanupUnattachedMedia();
+    assert.equal((await pool.query('SELECT source_cleaned FROM post_media WHERE source_key=$1',[signed.body.key])).rows[0].source_cleaned,true);
+    assert.deepEqual(Buffer.from(await (await fetch(base+mediaPath)).arrayBuffer()),valid);
+    await request(`/posts/${saved.body.id}`,'DELETE',author);
+    await cleanupUnattachedMedia();
+    assert.equal((await pool.query('SELECT 1 FROM post_media WHERE source_key=$1',[signed.body.key])).rowCount,0);
+    assert.equal((await fetch(base+mediaPath)).status,404);
+  } finally { config.mediaReviewMode=old; await unlink(path).catch(()=>{}); }
 });
 
 test('local S3 upload, CORS, ownership, type and size checks', {

@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { perUser, requireAuth, requireRole } from '../auth';
-import { pool } from '../db';
+import { pool, tx } from '../db';
+import { POST_SELECT } from '../queries';
+import { Authed } from '../auth';
 import { ah, HttpError } from '../http';
 
 export const reportsRouter = Router();
@@ -41,8 +43,31 @@ reportsRouter.post('/admin/reports/:id/resolve', mod, ah(async (req, res) => {
 
 reportsRouter.post('/admin/posts/:id/status', mod, ah(async (req, res) => {
   const { status } = z.object({ status: z.enum(['published', 'hidden', 'removed']) }).parse(req.body);
-  const { rowCount } = await pool.query('UPDATE posts SET status = $1::post_status WHERE id = $2', [status, z.string().uuid().parse(req.params.id)]);
-  if (!rowCount) throw new HttpError(404, 'Post not found');
+  await tx(async (c) => {
+    const postId = z.string().uuid().parse(req.params.id);
+    const p = await c.query('SELECT media_id FROM posts WHERE id=$1 FOR UPDATE', [postId]);
+    if (!p.rowCount) throw new HttpError(404, 'Post not found');
+    if (status === 'published' && p.rows[0].media_id && !(await c.query("SELECT 1 FROM post_media WHERE id=$1 AND state='approved'", [p.rows[0].media_id])).rowCount) {
+      throw new HttpError(409, 'Review the attachment before publishing this post.');
+    }
+    await c.query('UPDATE posts SET status=$1::post_status WHERE id=$2', [status,postId]);
+  });
+  res.json({ ok: true });
+}));
+
+reportsRouter.get('/admin/media-pending', mod, ah(async (req, res) => {
+  const { rows } = await pool.query(`${POST_SELECT} WHERE p.status='pending' AND m.state='pending' ORDER BY p.created_at,p.id LIMIT 50`, [(req as Authed).user!.id]);
+  res.set('Cache-Control', 'private, no-store').json({ items: rows.map(({ cursorAt: _cursor, ...post }) => post) });
+}));
+
+reportsRouter.post('/admin/posts/:id/approve-media', mod, ah(async (req, res) => {
+  await tx(async (c) => {
+    const p = await c.query("SELECT media_id FROM posts WHERE id=$1 AND status='pending' FOR UPDATE", [z.string().uuid().parse(req.params.id)]);
+    if (!p.rows[0]?.media_id) throw new HttpError(404, 'Pending media post not found');
+    const m = await c.query("UPDATE post_media SET state='approved' WHERE id=$1 AND state='pending' AND storage_key IS NOT NULL RETURNING id", [p.rows[0].media_id]);
+    if (!m.rowCount) throw new HttpError(409, 'This attachment is not ready for review.');
+    await c.query("UPDATE posts SET status='published' WHERE id=$1", [req.params.id]);
+  });
   res.json({ ok: true });
 }));
 
