@@ -1,0 +1,25 @@
+# Post loading, details and hosting review — 8 October 2026
+
+The owner selected a full page for post details, preserving the existing design. Cards in the slider, Latest/Browse and Your wall link through their text and pictures to `/posts/[id]`. Vote, comment, report, edit and delete controls remain separate. The full page shows the complete text with line breaks, the uncropped picture, author, category, publication time, existing vote score and comments. Comments open automatically. Failed reads can be retried; unavailable posts have a clear message.
+
+The new `GET /posts/:id` uses the existing post projection and viewer vote. It exposes only published posts, matching existing anonymous-read behavior; sensitive published posts remain readable just as in Latest. Hidden, removed and deleted posts return 404, including to their authors. No private account fields are returned. Personalized detail responses are private and not cached. Ranking and distress rules are unchanged.
+
+Feed components previously started anonymously and restarted when the account check completed, discarding the first result. They now use the resolved viewer. The API client shares only concurrent read requests for a matching viewer and URL, discards settled promises, and invalidates pending reuse on writes. It does not cache authentication links or completed post data. Read failures remain retryable. A 75-second limit covers post reads and the initial account check, so an unresponsive account request cannot hold the wall indefinitely. Successful HTTP responses containing HTML instead of JSON now produce an error rather than false loaded/saved state.
+
+The request-sharing tests demonstrate two concurrent identical reads becoming one fetch; separate viewers do not share vote state. This is not a measured production page-speed improvement. Render's Free service [sleeps after 15 idle minutes and takes about a minute to start](https://render.com/docs/free). Moving only the frontend to Vercel would retain that wait. No keep-alive monitor, paid instance or artificial posts were introduced.
+
+The existing footer SVG icons now link by default to https://www.instagram.com/htaflco/, https://x.com/htaflco and https://www.tiktok.com/@htaflco. The owner supplied these handles; account ownership and availability were not independently checked. Existing environment variables can override the links. Each icon has an accessible label, tooltip and safe new-tab attributes.
+
+Local verification: API typecheck, 36 tests with zero skipped, and build passed. Website typecheck and ten tests passed. Browser checks verified keyboard navigation from a card to the full page, automatically loaded comments, all three footer icons/URLs, and a 390px layout with no horizontal overflow and visible keyboard focus. Disposable local QA content was used; no production post or account was created. Production DNS errors prevented HTTP timing checks during this work.
+
+## Vercel Free assessment
+
+Reviewed the current official docs on 8 October 2026:
+
+- [Hobby](https://vercel.com/docs/plans/hobby) is free with usage caps and is restricted to personal, non-commercial use. HTAFL's eligibility depends on its intended business use; a free-to-join site is not automatically non-commercial. Exceeding limits can pause features until the allowance resets.
+- The current Next.js frontend can use Hobby with the existing HTTPS backend proxy. It would get a Vercel address or an owned custom domain; `htaflco.netlify.app` belongs to Netlify and cannot be moved as a Vercel domain. Auth origin, email-link origin and production configuration must be switched together. Moving the frontend alone does not eliminate Render cold starts.
+- [Express is supported](https://vercel.com/docs/frameworks/backend/express), but it runs as a stateless Vercel Function. [Hobby function duration is capped at 300 seconds](https://vercel.com/docs/functions/limitations). The current continuous ranking loop cannot be moved unchanged.
+- [Hobby cron jobs run at most once per day](https://vercel.com/docs/cron-jobs/usage-and-pricing), incompatible with the existing minute/five-minute ranking schedule. Preserving that behavior needs a separately designed worker or durable scheduling approach.
+- A backend move also needs shared rate-limit enforcement across function instances, bounded database pooling, packaging of the database CA, and a compatible Brevo authorization policy. Brevo currently permits the approved Render outbound IP ranges; Vercel email delivery has not been tested.
+
+Recommendation: the frontend is technically compatible with Vercel Hobby if its use is eligible. Keep the current deployment while designing a complete free backend migration that preserves ranking, email and security. No Vercel project, paid plan or hosting migration was created during this review.

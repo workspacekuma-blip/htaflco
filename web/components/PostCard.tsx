@@ -7,10 +7,10 @@ import { Comment, Post } from '@/lib/types';
 
 type VoteResult = { up: number; down: number; score: number; myVote: 1 | -1 | null };
 
-export default function PostCard({ post }: { post: Post }) {
+export default function PostCard({ post, details = false }: { post: Post; details?: boolean }) {
   const { me } = useAuth();
   const [p, setP] = useState(post);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(details);
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [text, setText] = useState('');
   const [msg, setMsg] = useState('');
@@ -19,6 +19,14 @@ export default function PostCard({ post }: { post: Post }) {
   const [reportBusy, setReportBusy] = useState(false);
 
   useEffect(() => { setP(post); }, [post]);
+  useEffect(() => {
+    if (!details) return;
+    let active = true;
+    api<{ items: Comment[] }>(`/posts/${post.id}/comments`, {}, me?.id ?? 'guest')
+      .then((r) => { if (active) setComments(r.items); })
+      .catch((e) => { if (active) setMsg((e as Error).message); });
+    return () => { active = false; };
+  }, [details, post.id, me?.id]);
 
   async function vote(v: 1 | -1) {
     if (!me) return setMsg('Log in to vote.');
@@ -36,7 +44,7 @@ export default function PostCard({ post }: { post: Post }) {
     setOpen(next);
     if (next && comments === null) {
       try {
-        const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`);
+        const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`, {}, me?.id ?? 'guest');
         setComments(r.items);
       } catch (e) { setMsg((e as Error).message); }
     }
@@ -47,7 +55,7 @@ export default function PostCard({ post }: { post: Post }) {
     if (!body) return;
     try {
       await api(`/posts/${p.id}/comments`, { method: 'POST', body: json({ body }) });
-      const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`);
+      const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`, {}, me?.id ?? 'guest');
       setComments(r.items);
       setP({ ...p, commentCount: r.items.length });
       setText('');
@@ -74,11 +82,21 @@ export default function PostCard({ post }: { post: Post }) {
   }
 
   return (
-    <article className="card">
-      {/* Plain img on purpose: pictures come from your own storage domain */}
-      {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt={`Picture shared by ${p.author}`} loading="lazy" />}
-      <p className="cardtext">{p.body}</p>
+    <article className={`card${details ? ' post-detail' : ''}`}>
+      {details ? (
+        <>
+          {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt={`Picture shared by ${p.author}`} />}
+          <p className="cardtext">{p.body}</p>
+        </>
+      ) : (
+        <Link className="post-link" href={`/posts/${p.id}`} aria-label={`View post by ${p.author}: ${p.body}`}>
+          {/* Plain img on purpose: pictures come from your own storage domain */}
+          {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt={`Picture shared by ${p.author}`} loading="lazy" />}
+          <p className="cardtext">{p.body}</p>
+        </Link>
+      )}
       <p className="cardmeta">{p.author} &middot; {p.pillar} &middot; {fmtDate(p.createdAt)}{p.editedAt ? ' · edited' : ''}</p>
+      {details && <p className="cardmeta">{p.craft} &middot; {new Date(p.createdAt).toLocaleString()}</p>}
       <div className="acts">
         <span className="vote">
           <button type="button" aria-label="Upvote" aria-pressed={p.myVote === 1} onClick={() => void vote(1)}>▲</button>
@@ -103,6 +121,7 @@ export default function PostCard({ post }: { post: Post }) {
       {open && (
         <div className="comments">
           <ul>
+            {comments === null && <li role="status">Loading comments…</li>}
             {(comments ?? []).map((c) => (
               <li key={c.id}><strong>{c.author}:</strong> {c.body}</li>
             ))}

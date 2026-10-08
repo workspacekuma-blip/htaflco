@@ -6,7 +6,7 @@ import { Page, Post } from '@/lib/types';
 import PostCard from './PostCard';
 
 export default function PostSlider() {
-  const { me } = useAuth();
+  const { me, loading: authLoading } = useAuth();
   const [posts, setPosts] = useState<Post[] | null>(null);
   const [paused, setPaused] = useState(false);
   const hover = useRef(false);
@@ -18,19 +18,20 @@ export default function PostSlider() {
     const version = ++request.current;
     setError('');
     try {
-      const r = await api<Page>('/feed/featured');
+      const r = await api<Page>('/feed/featured', {}, me?.id ?? 'guest');
       if (version === request.current) setPosts(r.items);
     } catch (e) {
       if (version === request.current) { setError((e as Error).message); setPosts([]); }
     }
-  }, []);
+  }, [me?.id]);
 
   useEffect(() => {
+    if (authLoading) return;
     setPosts(null);
     void load();
     window.addEventListener('htafl:posted', load);
     return () => { request.current++; window.removeEventListener('htafl:posted', load); };
-  }, [load, me?.id]);
+  }, [load, authLoading]);
 
   const step = useCallback((dir: number) => {
     const t = track.current;
@@ -66,7 +67,7 @@ export default function PostSlider() {
       <div className="track" ref={track} tabIndex={0}
         onMouseEnter={() => (hover.current = true)} onMouseLeave={() => (hover.current = false)}
         onFocus={() => (hover.current = true)} onBlur={() => (hover.current = false)}>
-        {posts === null && <p className="note">Loading…</p>}
+        {posts === null && <p className="note" role="status">Loading posts…</p>}
         {error && <p className="error" role="alert">{error} <button type="button" onClick={() => void load()}>Try again</button></p>}
         {!error && posts?.length === 0 && <p className="note">No community picks yet. Upvote the posts you love to help them appear here.</p>}
         {posts?.map((p) => <div className="slide" key={p.id}><PostCard post={p} /></div>)}

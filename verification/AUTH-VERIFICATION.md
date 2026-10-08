@@ -11,3 +11,5 @@ Local checks: API typecheck, all 35 tests (zero skipped), and build passed. Webs
 Real browser check used a disposable account in the local development database only: signed out first, opened the verification link, saw Email verified and Log out (Local verification QA), then opened the home page and confirmed the composer was available without entering a password. The screenshot is stored outside Git. No synthetic account or post was added to production.
 
 This change has not yet been tested with a fresh production verification email. The owner's already-used link remains consumed. Existing verification tokens have no expiry timestamp; adding a token lifetime and password recovery is separate work.
+
+The auth code was pushed as `5ebeae2`; Render deploy `dep-db3vjhks728c73fdfab0` visibly reports Deploy succeeded / Live for that commit's title, with a 50.6-second deploy duration. Direct public HTTP checks hit DNS resolution errors during the follow-up; no new production signup was created to bypass the consumed owner link.

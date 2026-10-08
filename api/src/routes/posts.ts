@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Authed, perUser, requireAuth, requireMember } from '../auth';
 import { pool, tx } from '../db';
 import { ah, HttpError } from '../http';
-import { feedPage } from '../queries';
+import { feedPage, POST_SELECT } from '../queries';
 import { verifiedUrl } from '../media';
 import { flagSensitive } from '../safety';
 
@@ -12,6 +12,19 @@ const uidOf = (req: unknown) => (req as Authed).user!.id;
 export const PILLARS = ['Create', 'Overcome', 'Connect'] as const;
 
 export const postsRouter = Router();
+
+// Post detail uses the same published-content visibility as Latest and Browse.
+postsRouter.get('/posts/:id', ah(async (req, res) => {
+  const postId = id.parse(req.params.id);
+  const { rows } = await pool.query(
+    `${POST_SELECT} WHERE p.id = $2 AND p.status = 'published'`,
+    [(req as Authed).user?.id ?? null, postId],
+  );
+  if (!rows[0]) throw new HttpError(404, 'Post not found');
+  const { cursorAt: _cursor, ...post } = rows[0];
+  res.set('Cache-Control', 'private, no-store');
+  res.json(post);
+}));
 
 // Create a post. Craft comes from the member's profile.
 postsRouter.post('/posts', requireMember, perUser(30, 3600_000), ah(async (req, res) => {

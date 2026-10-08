@@ -97,7 +97,11 @@ For STARTTLS, include `?requireTLS=true`. Without SMTP, local development prints
 If configured SMTP fails in production, the request returns 503 rather than claiming delivery succeeded. The created account remains unverified; sign in and resend verification after the provider recovers. Production logs do not include verification links or provider error details.
 
 ## Pages in the website
-`/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
+`/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/posts/[id]` (full post, picture, author details, votes and comments), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
+
+Post text and pictures link to the full post page; vote/report/comment buttons keep their own actions. Hidden, removed and deleted posts cannot be opened through a direct link. The footer uses the owner's supplied Instagram, X (Twitter) and TikTok `@htaflco` profiles. The `NEXT_PUBLIC_*` social variables remain optional overrides.
+
+Feed reads wait for the initial account check, avoiding a discarded anonymous request followed by a second member request. Concurrent reads share a request only for the same viewer and URL; completed responses are never cached. Writes clear pending-read reuse. Account and post reads time out after 75 seconds with recovery messaging, and an HTML proxy/loading response is rejected instead of being treated as saved data. The Render Free cold start can still take about a minute after inactivity; these changes do not make the free backend always on. See [loading and hosting review](verification/POSTS-AND-HOSTING.md).
 
 "On the wall right now" shows **up to five community picks** from posts created in the last seven days. The existing Featured ranking uses trusted up/down votes, Wilson confidence scoring, a minimum voter threshold, one post per author and at most two per craft. It is not a raw upvote-count leaderboard. The separate Featured tab/grid remains removed; Rising is the default tab.
 
@@ -113,7 +117,6 @@ Every Featured computation atomically saves both the current ranking and that we
 - **Privacy, Accessibility and Credits pages** are placeholders. The Community Guidelines page is a short draft. Get them written and checked against the rules that apply to your members.
 - **Safety:** `api/src/safety.ts` is a crude keyword check. Replace it with a proper classifier and a human review process. The post box shows a gentle message when a post is flagged: add support resources for your members' region (marked with a TODO in `web/components/Composer.tsx`).
 - **Pictures** are decoded, validated and re-encoded, but still need an owner-selected unsafe-content scanning process and production storage-policy verification.
-- **Social links:** set `NEXT_PUBLIC_INSTAGRAM_URL`, `NEXT_PUBLIC_X_URL`, `NEXT_PUBLIC_TIKTOK_URL` in `web/.env.local`. The footer icons appear when set.
 - **Video** is not included. **Account data export** is not included.
 - Decide whether under-18s are in scope. That changes sign-up, privacy and safety rules.
 

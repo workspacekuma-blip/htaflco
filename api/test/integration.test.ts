@@ -232,6 +232,34 @@ test('self-voting is forbidden and leaves no vote', async () => {
   for (const value of [1, -1, 0]) assert.equal((await vote(id, author, value)).status, 403);
   assert.deepEqual(await counters(id), { up: 0, down: 0 });
 });
+test('post details expose published content and viewer votes, never hidden or deleted posts', async () => {
+  const author = await user(); const viewer = await user();
+  const postId = await post(author, 'A complete post with\na second line.');
+  await vote(postId, viewer, 1);
+  const response = await fetch(`${base}/posts/${postId}`, { headers: { cookie: viewer.cookie } });
+  assert.equal(response.status, 200);
+  const detail = { body: await response.json() as any };
+  assert.equal(detail.body.id, postId);
+  assert.equal(detail.body.body, 'A complete post with\na second line.');
+  assert.equal(detail.body.author, 'Test member');
+  assert.equal(detail.body.myVote, 1);
+  assert.equal(detail.body.up, 1);
+  assert.equal(detail.body.score, 1);
+  assert.equal(detail.body.commentCount, 0);
+  assert.equal((await request(`/posts/${postId}`)).body.myVote, null);
+  assert.equal('password_hash' in detail.body, false);
+  assert.equal('email' in detail.body, false);
+  await pool.query("UPDATE posts SET sensitive=true WHERE id=$1", [postId]);
+  assert.equal((await request(`/posts/${postId}`)).status, 200);
+  for (const status of ['hidden', 'removed']) {
+    await pool.query('UPDATE posts SET status=$1 WHERE id=$2', [status, postId]);
+    assert.equal((await request(`/posts/${postId}`, 'GET', author)).status, 404);
+    assert.equal((await request(`/posts/${postId}`)).status, 404);
+  }
+  await pool.query('DELETE FROM posts WHERE id=$1', [postId]);
+  assert.equal((await request(`/posts/${postId}`)).status, 404);
+  assert.equal((await request('/posts/not-a-uuid')).status, 400);
+});
 test('keyset pagination preserves equal timestamps and microseconds without duplicates', async () => {
   const author = await user();
   for (let i = 0; i < 31; i++) {

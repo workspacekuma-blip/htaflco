@@ -12,7 +12,7 @@ const TABS = [
 ] as const;
 
 function FeedList({ path, empty }: { path: string; empty: string }) {
-  const { me } = useAuth();
+  const { me, loading: authLoading } = useAuth();
   const [items, setItems] = useState<Post[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -25,7 +25,7 @@ function FeedList({ path, empty }: { path: string; empty: string }) {
     setError('');
     try {
       const sep = path.includes('?') ? '&' : '?';
-      const r = await api<Page>(path + (c ? `${sep}cursor=${encodeURIComponent(c)}` : ''));
+      const r = await api<Page>(path + (c ? `${sep}cursor=${encodeURIComponent(c)}` : ''), {}, me?.id ?? 'guest');
       if (version !== request.current) return;
       setItems((prev) => (c ? [...prev, ...r.items] : r.items));
       setCursor(r.nextCursor ?? null);
@@ -34,23 +34,24 @@ function FeedList({ path, empty }: { path: string; empty: string }) {
     } finally {
       if (version === request.current) setLoading(false);
     }
-  }, [path]);
+  }, [path, me?.id]);
 
   useEffect(() => {
+    if (authLoading) return;
     setItems([]);
     setCursor(null);
     void load(null);
     const again = () => void load(null);
     window.addEventListener('htafl:posted', again);
     return () => { request.current++; window.removeEventListener('htafl:posted', again); };
-  }, [load, me?.id]);
+  }, [load, authLoading]);
 
   return (
     <div>
       <div className="grid">{items.map((p) => <PostCard key={p.id} post={p} />)}</div>
       {!loading && !error && items.length === 0 && <p className="note">{empty}</p>}
       {error && <p className="error" role="alert">{error} <button type="button" onClick={() => void load(cursor)}>Try again</button></p>}
-      {loading && <p className="note">Loading…</p>}
+      {loading && <p className="note" role="status">Loading posts…</p>}
       {cursor && !loading && <button type="button" className="btn ghost" onClick={() => void load(cursor)}>Show more</button>}
     </div>
   );

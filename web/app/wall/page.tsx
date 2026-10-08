@@ -32,7 +32,7 @@ function WallItem({ post, onGone }: { post: Post; onGone: (id: string) => void }
 
   return (
     <article className="card">
-      {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt="Your picture" loading="lazy" />}
+      {editing && p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt="Your picture" loading="lazy" />}
       {editing ? (
         <>
           <textarea className="edit" value={draft} maxLength={240} onChange={(e) => setDraft(e.target.value)} aria-label="Edit your post" />
@@ -43,7 +43,10 @@ function WallItem({ post, onGone }: { post: Post; onGone: (id: string) => void }
         </>
       ) : (
         <>
-          <p className="cardtext">{p.body}</p>
+          <Link className="post-link" href={`/posts/${p.id}`} aria-label={`View your post: ${p.body}`}>
+            {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt="Your picture" loading="lazy" />}
+            <p className="cardtext">{p.body}</p>
+          </Link>
           <p className="cardmeta">{p.pillar} &middot; {fmtDate(p.createdAt)}{p.editedAt ? ' · edited' : ''} &middot; score {p.score} &middot; {p.commentCount} comments</p>
           <div className="acts">
             {confirming ? (
@@ -77,13 +80,13 @@ export default function Wall() {
     setBusy(true);
     setError('');
     try {
-      const r = await api<Page>('/me/wall?limit=20' + (c ? `&cursor=${encodeURIComponent(c)}` : ''));
+      const r = await api<Page>('/me/wall?limit=20' + (c ? `&cursor=${encodeURIComponent(c)}` : ''), {}, me?.id ?? 'guest');
       setItems((prev) => (c ? [...prev, ...r.items] : r.items));
       setCursor(r.nextCursor ?? null);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
-  }, []);
+  }, [me?.id]);
 
-  useEffect(() => { if (me) void load(null); }, [me, load]);
+  useEffect(() => { if (me?.id) void load(null); }, [me?.id, load]);
 
   if (loading) return <div className="wrap page" />;
   if (!me) return <div className="wrap page"><h1 className="h2">Your wall</h1><p><Link href="/login">Log in</Link> or <Link href="/join">join</Link> to see your posts.</p></div>;
@@ -95,6 +98,7 @@ export default function Wall() {
       <div className="grid">{items.map((p) => <WallItem key={p.id} post={p} onGone={(id) => setItems((xs) => xs.filter((x) => x.id !== id))} />)}</div>
       {!busy && !error && items.length === 0 && <p className="note">Nothing here yet. <Link href="/">Make your first post</Link>.</p>}
       {error && <p className="error" role="alert">{error} <button type="button" onClick={() => void load(cursor)}>Try again</button></p>}
+      {busy && <p className="note" role="status">Loading posts…</p>}
       {cursor && !busy && <button type="button" className="btn ghost" onClick={() => void load(cursor)}>Show more</button>}
     </div>
   );
