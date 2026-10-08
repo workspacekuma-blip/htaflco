@@ -20,8 +20,8 @@ export function generateStaticParams() {
   return Object.keys(PAGES).map((slug) => ({ slug }));
 }
 
-export default function Info({ params }: { params: { slug: string } }) {
-  const page = PAGES[params.slug];
+export default async function Info({ params }: { params: Promise<{ slug: string }> }) {
+  const page = PAGES[(await params).slug];
   if (!page) notFound();
   return (
     <div className="wrap page narrow">
