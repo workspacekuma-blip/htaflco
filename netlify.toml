@@ -1,0 +1,10 @@
+[build]
+  base = "web"
+  command = "npm run typecheck && npm test && npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Set API_URL to the hosted API's HTTPS origin in Netlify before deploying.
+# Do not copy api/.env or the local QA database to hosting.

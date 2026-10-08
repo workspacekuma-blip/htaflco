@@ -1,0 +1,8 @@
+[
+  {
+    "AllowedOrigins": ["https://htaflco.netlify.app"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["content-type"],
+    "MaxAgeSeconds": 300
+  }
+]
