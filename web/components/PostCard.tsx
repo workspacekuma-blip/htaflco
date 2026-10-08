@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { api, fmtDate, json } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Comment, Post } from '@/lib/types';
+import { postFirstLine, postHeading } from '@/lib/post-preview';
 
 type VoteResult = { up: number; down: number; score: number; myVote: 1 | -1 | null };
 
@@ -20,7 +21,7 @@ export default function PostCard({ post, details = false }: { post: Post; detail
 
   useEffect(() => { setP(post); }, [post]);
   useEffect(() => {
-    if (!details) return;
+    if (!details || post.status === 'pending') return;
     let active = true;
     api<{ items: Comment[] }>(`/posts/${post.id}/comments`, {}, me?.id ?? 'guest')
       .then((r) => { if (active) setComments(r.items); })
@@ -85,19 +86,25 @@ export default function PostCard({ post, details = false }: { post: Post; detail
     <article className={`card${details ? ' post-detail' : ''}`}>
       {details ? (
         <>
-          {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt={`Picture shared by ${p.author}`} />}
+          {p.mediaUrl && (p.mediaKind === 'video' ? <video className="cardimg" src={p.mediaUrl} controls playsInline preload="metadata" aria-label={p.mediaAlt || `Video shared by ${p.author}`} /> : <img className="cardimg" src={p.mediaUrl} alt={p.mediaAlt || `Picture shared by ${p.author}`} />)}
+          {p.mediaKind === 'video' && p.mediaAlt && <p className="note">{p.mediaAlt}</p>}
           <p className="cardtext">{p.body}</p>
         </>
       ) : (
-        <Link className="post-link" href={`/posts/${p.id}`} aria-label={`View post by ${p.author}: ${p.body}`}>
+        <Link className="post-link" href={`/posts/${p.id}`} aria-label={`Read ${postHeading(p)} by ${p.author}`}>
           {/* Plain img on purpose: pictures come from your own storage domain */}
-          {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt={`Picture shared by ${p.author}`} loading="lazy" />}
-          <p className="cardtext">{p.body}</p>
+          {p.mediaUrl && (p.mediaKind === 'video' ? <p className="video-preview">▶ Video · Open post to play</p> : <img className="cardimg" src={p.mediaUrl} alt={p.mediaAlt || `Picture shared by ${p.author}`} loading="lazy" />)}
+          <h3 className="cardtitle">{postHeading(p)}</h3>
+          <p className="cardpreview">{postFirstLine(p.body)}</p>
+          <span className="note">Read full post →</span>
         </Link>
       )}
+      <p className="response-label">{p.responseLabel || 'Just sharing'}</p>
+      {p.status === 'pending' && <p className="gate">Awaiting a moderator&apos;s review. This post is visible to you and moderators.</p>}
+      {p.promptTitle && <p className="cardmeta">Weekly prompt: {p.promptTitle}</p>}
       <p className="cardmeta">{p.author} &middot; {p.pillar} &middot; {fmtDate(p.createdAt)}{p.editedAt ? ' · edited' : ''}</p>
       {details && <p className="cardmeta">{p.craft} &middot; {new Date(p.createdAt).toLocaleString()}</p>}
-      <div className="acts">
+      {p.status !== 'pending' && <div className="acts">
         <span className="vote">
           <button type="button" aria-label="Upvote" aria-pressed={p.myVote === 1} onClick={() => void vote(1)}>▲</button>
           <span className="sc" aria-label="Score">{p.score}</span>
@@ -105,7 +112,7 @@ export default function PostCard({ post, details = false }: { post: Post; detail
         </span>
         <button type="button" onClick={() => void toggleComments()} aria-expanded={open}>Comment {p.commentCount}</button>
         <button type="button" className="quiet" onClick={() => me ? setReporting(!reporting) : setMsg('Log in to report.')}>Report</button>
-      </div>
+      </div>}
       {reporting && (
         <div className="comments">
           <label>What is wrong with this post?
@@ -118,7 +125,7 @@ export default function PostCard({ post, details = false }: { post: Post; detail
         </div>
       )}
       {msg && <p className="cardmsg" role="status">{msg}</p>}
-      {open && (
+      {open && p.status !== 'pending' && (
         <div className="comments">
           <ul>
             {comments === null && <li role="status">Loading comments…</li>}

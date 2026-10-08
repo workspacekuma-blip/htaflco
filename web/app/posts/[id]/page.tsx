@@ -6,6 +6,7 @@ import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Post } from '@/lib/types';
 import PostCard from '@/components/PostCard';
+import { postHeading } from '@/lib/post-preview';
 
 export default function PostPage() {
   const { id } = useParams<{ id: string }>();
@@ -32,7 +33,7 @@ export default function PostPage() {
   return (
     <div className="wrap page narrow">
       <p><Link href="/">Back to the wall</Link></p>
-      <h1 className="h2">{post ? `Post by ${post.author}` : 'Post details'}</h1>
+      <h1 className="h2">{post ? postHeading(post) : 'Post details'}</h1>
       {!post && !error && <p className="note" role="status">Loading post…</p>}
       {error && <p className="error" role="alert">{error} <button type="button" onClick={() => setAttempt((n) => n + 1)}>Try again</button></p>}
       {post && <PostCard key={post.id} post={post} details />}

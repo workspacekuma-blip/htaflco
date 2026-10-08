@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, json } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import PromptScheduler from '@/components/PromptScheduler';
+import { Post } from '@/lib/types';
 
 interface Report { id: string; targetType: string; targetId: string; reason: string; createdAt: string; postBody: string | null; postStatus: string | null }
 interface Flagged { id: string; body: string; createdAt: string; author: string }
@@ -10,16 +12,19 @@ export default function Admin() {
   const { me, loading } = useAuth();
   const [reports, setReports] = useState<Report[]>([]);
   const [flagged, setFlagged] = useState<Flagged[]>([]);
+  const [media, setMedia] = useState<Post[]>([]);
   const [msg, setMsg] = useState('');
   const allowed = me && (me.role === 'moderator' || me.role === 'admin');
 
   const load = useCallback(async () => {
-    const [r, f] = await Promise.all([
+    const [r, f, m] = await Promise.all([
       api<{ items: Report[] }>('/admin/reports'),
       api<{ items: Flagged[] }>('/admin/sensitive'),
+      api<{ items: Post[] }>('/admin/media-pending'),
     ]);
     setReports(r.items);
     setFlagged(f.items);
+    setMedia(m.items);
   }, []);
 
   useEffect(() => { if (allowed) void load().catch((e) => setMsg((e as Error).message)); }, [allowed, load]);
@@ -35,7 +40,20 @@ export default function Admin() {
   return (
     <div className="wrap page">
       <h1 className="h2">Moderation</h1>
+      <PromptScheduler />
       {msg && <p className="error" role="alert">{msg}</p>}
+
+      <h2>Pictures and videos awaiting review ({media.length})</h2>
+      <p className="note">Review the complete post and attachment before publishing. This is human review; files have not been automatically scanned for unsafe content. Video: watch the whole clip and listen to its audio.</p>
+      {!media.length && <p className="note">No media posts awaiting review.</p>}
+      <div className="grid">{media.map((p) => <article className="card" key={p.id}>
+        <h3>{p.title || `Post by ${p.author}`}</h3>
+        {p.mediaUrl && (p.mediaKind === 'video' ? <video className="cardimg" controls playsInline preload="metadata" src={p.mediaUrl} aria-label={p.mediaAlt || `Video by ${p.author}`} /> : <img className="cardimg" src={p.mediaUrl} alt={p.mediaAlt || `Picture by ${p.author}`} />)}
+        {p.mediaAlt && <p className="note">{p.mediaAlt}</p>}
+        <p className="cardtext">{p.body}</p><p className="cardmeta">{p.author} · {p.responseLabel}</p>
+        <div className="acts"><button type="button" onClick={() => void run(() => api(`/admin/posts/${p.id}/approve-media`, { method: 'POST' }))}>Approve and publish</button>
+          <button type="button" onClick={() => void run(() => setStatus(p.id, 'hidden'))}>Hide</button></div>
+      </article>)}</div>
 
       <h2>Open reports ({reports.length})</h2>
       {reports.length === 0 && <p className="note">No open reports.</p>}

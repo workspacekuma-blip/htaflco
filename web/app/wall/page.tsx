@@ -3,12 +3,15 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { api, fmtDate, json } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Page, Post } from '@/lib/types';
+import { Page, Post, RESPONSE_LABELS, ResponseLabel } from '@/lib/types';
+import { postFirstLine, postHeading } from '@/lib/post-preview';
 
 function WallItem({ post, onGone }: { post: Post; onGone: (id: string) => void }) {
   const [p, setP] = useState(post);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(post.body);
+  const [title, setTitle] = useState(post.title ?? '');
+  const [label, setLabel] = useState<ResponseLabel>(post.responseLabel || 'Just sharing');
   const [confirming, setConfirming] = useState(false);
   const [msg, setMsg] = useState('');
 
@@ -16,8 +19,8 @@ function WallItem({ post, onGone }: { post: Post; onGone: (id: string) => void }
     const body = draft.trim();
     if (!body) return setMsg('A post needs at least a few words.');
     try {
-      await api(`/posts/${p.id}`, { method: 'PATCH', body: json({ body }) });
-      setP({ ...p, body, editedAt: new Date().toISOString() });
+      await api(`/posts/${p.id}`, { method: 'PATCH', body: json({ body, title: title.trim() || undefined, responseLabel: label }) });
+      setP({ ...p, body, title: title.trim() || p.title, responseLabel: label, editedAt: new Date().toISOString() });
       setEditing(false);
       setMsg('Post updated.');
     } catch (e) { setMsg((e as Error).message); }
@@ -32,21 +35,25 @@ function WallItem({ post, onGone }: { post: Post; onGone: (id: string) => void }
 
   return (
     <article className="card">
-      {editing && p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt="Your picture" loading="lazy" />}
+      {editing && p.mediaUrl && p.mediaKind !== 'video' && <img className="cardimg" src={p.mediaUrl} alt={p.mediaAlt || 'Your picture'} loading="lazy" />}
+      {p.status !== 'published' && <p className="gate">{p.status === 'pending' ? 'Awaiting moderation. Only you and moderators can view this post.' : 'This post has been hidden by moderation.'}</p>}
       {editing ? (
         <>
-          <textarea className="edit" value={draft} maxLength={240} onChange={(e) => setDraft(e.target.value)} aria-label="Edit your post" />
+          <label>Post heading<input className="post-title-input" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} /></label>
+          <textarea className="edit" value={draft} maxLength={10000} onChange={(e) => setDraft(e.target.value)} aria-label="Edit your post" />
+          <label>Response label<select value={label} onChange={(e) => setLabel(e.target.value as ResponseLabel)}>{RESPONSE_LABELS.map((l) => <option key={l}>{l}</option>)}</select></label>
           <div className="acts">
             <button type="button" className="btn small" onClick={() => void save()}>Save changes</button>
-            <button type="button" onClick={() => { setEditing(false); setDraft(p.body); }}>Cancel</button>
+            <button type="button" onClick={() => { setEditing(false); setDraft(p.body); setTitle(p.title ?? ''); setLabel(p.responseLabel || 'Just sharing'); }}>Cancel</button>
           </div>
         </>
       ) : (
         <>
-          <Link className="post-link" href={`/posts/${p.id}`} aria-label={`View your post: ${p.body}`}>
-            {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt="Your picture" loading="lazy" />}
-            <p className="cardtext">{p.body}</p>
+          <Link className="post-link" href={`/posts/${p.id}`} aria-label={`Read your post: ${postHeading(p)}`}>
+            {p.mediaUrl && (p.mediaKind === 'video' ? <p className="video-preview">▶ Video · Open post to play</p> : <img className="cardimg" src={p.mediaUrl} alt={p.mediaAlt || 'Your picture'} loading="lazy" />)}
+            <h3 className="cardtitle">{postHeading(p)}</h3><p className="cardpreview">{postFirstLine(p.body)}</p><span className="note">Read full post →</span>
           </Link>
+          <p className="response-label">{p.responseLabel || 'Just sharing'}</p>
           <p className="cardmeta">{p.pillar} &middot; {fmtDate(p.createdAt)}{p.editedAt ? ' · edited' : ''} &middot; score {p.score} &middot; {p.commentCount} comments</p>
           <div className="acts">
             {confirming ? (

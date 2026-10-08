@@ -55,8 +55,17 @@ button { cursor: pointer; }
 .card { background: var(--mist); border-left: 4px solid var(--hope); padding: 1rem; display: flex; flex-direction: column; min-width: 0; }
 .cardimg { width: 100%; height: 11rem; object-fit: cover; margin: 0 0 .75rem; display: block; }
 .cardtext { font-family: var(--d); font-weight: 700; font-size: 1.2rem; line-height: 1.2; margin: 0 0 .5rem; overflow-wrap: anywhere; }
+.cardtitle { font-size: 1.4rem; margin-bottom: .5rem; overflow-wrap: anywhere; }
+.cardpreview { font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: .4rem; }
+.response-label { align-self: flex-start; font-family: var(--d); font-size: .85rem; border: 1px solid var(--soft); border-radius: 2rem; padding: .15rem .65rem; margin: .6rem 0; }
+.weekly-prompt { padding: 1rem; background: var(--paper); border-left: 4px solid var(--river); margin-bottom: 1.5rem; }
+.post-title-input { display: block; width: 100%; font: inherit; color: var(--ink); background: var(--paper); border: 2px solid var(--ink); border-radius: .25rem; padding: .5rem .65rem; margin-bottom: 1rem; }
+.notification-list, .prompt-list { list-style: none; padding: 0; display: grid; gap: 1rem; }
+.notification-heading { font-size: 1.35rem; overflow-wrap: anywhere; }
+.notification-list p { overflow-wrap: anywhere; }
+.prompt-admin { padding-bottom: 2rem; margin-bottom: 2rem; border-bottom: 2px solid var(--ink); }
 .post-link { display: block; text-decoration: none; }
-.post-link:hover .cardtext { text-decoration: underline; text-underline-offset: .15em; }
+.post-link:hover .cardtitle { text-decoration: underline; text-underline-offset: .15em; }
 .post-detail .cardtext { white-space: pre-wrap; font-size: 1.5rem; line-height: 1.4; }
 .post-detail .cardimg { height: auto; max-height: 38rem; object-fit: contain; }
 .post-detail .comments ul { max-height: none; }
@@ -143,3 +152,7 @@ button { cursor: pointer; }
 .sf .base a { font-family: var(--d); font-weight: 500; font-size: 1rem; text-underline-offset: 4px; }
 .sf a:focus-visible { outline-color: var(--hope); }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+.video-preview { padding: 2rem 1rem; background: var(--ink); color: var(--paper); text-align: center; }
+video.cardimg { object-fit: contain; background: #000; }
+.media-upload { margin: 1rem 0; }
+.media-upload input:not([type=file]) { display: block; width: 100%; margin-top: .4rem; }
