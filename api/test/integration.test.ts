@@ -169,3 +169,29 @@ test('distress notice is retained and hidden post comments are not publicly expo
   await pool.query("UPDATE posts SET status='hidden' WHERE id=$1", [r.body.id]);
   assert.equal((await request(`/posts/${r.body.id}/comments`)).status, 404);
 });
+
+test('local S3 upload, CORS, ownership, type and size checks', {
+  skip: !/^http:\/\/(localhost|127\.0\.0\.1):9000$/.test(process.env.S3_ENDPOINT ?? ''),
+}, async () => {
+  const author = await user(); const other = await user();
+  assert.equal((await request('/media/upload-url', 'POST', author, { contentType: 'image/svg+xml' })).status, 400);
+  const signed = await request('/media/upload-url', 'POST', author, { contentType: 'image/png' });
+  assert.equal(signed.status, 200);
+  const cors = await fetch(signed.body.url, { method: 'OPTIONS', headers: {
+    origin: 'http://localhost:3001', 'access-control-request-method': 'PUT', 'access-control-request-headers': 'content-type',
+  } });
+  assert.ok(['http://localhost:3001', '*'].includes(cors.headers.get('access-control-allow-origin') ?? ''));
+  assert.ok(cors.headers.get('access-control-allow-methods')?.includes('PUT'));
+  const fixture = readFileSync('../scripts/fixtures/upload-test.png');
+  assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: fixture })).ok);
+  const saved = await request('/posts', 'POST', author, { body: 'Test picture', mediaKey: signed.body.key });
+  assert.equal(saved.status, 201);
+  const feed = await request('/feed/latest');
+  const publicPicture = feed.body.items.find((p: any) => p.id === saved.body.id).mediaUrl;
+  const image = await fetch(publicPicture);
+  assert.ok(image.ok); assert.deepEqual(Buffer.from(await image.arrayBuffer()), fixture);
+  assert.equal((await request('/posts', 'POST', other, { body: 'Stolen picture', mediaKey: signed.body.key })).status, 400);
+  const oversized = await request('/media/upload-url', 'POST', author, { contentType: 'image/png' });
+  assert.ok((await fetch(oversized.body.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: Buffer.alloc(2_000_001) })).ok);
+  assert.equal((await request('/posts', 'POST', author, { body: 'Oversized picture', mediaKey: oversized.body.key })).status, 400);
+});

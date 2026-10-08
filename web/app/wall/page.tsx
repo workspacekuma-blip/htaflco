@@ -71,14 +71,16 @@ export default function Wall() {
   const [items, setItems] = useState<Post[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
+  const [error, setError] = useState('');
 
   const load = useCallback(async (c: string | null) => {
     setBusy(true);
+    setError('');
     try {
       const r = await api<Page>('/me/wall?limit=20' + (c ? `&cursor=${encodeURIComponent(c)}` : ''));
       setItems((prev) => (c ? [...prev, ...r.items] : r.items));
       setCursor(r.nextCursor ?? null);
-    } finally { setBusy(false); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }, []);
 
   useEffect(() => { if (me) void load(null); }, [me, load]);
@@ -91,7 +93,8 @@ export default function Wall() {
       <h1 className="h2">Your wall</h1>
       <p>Everything you post stays here. You can edit your words or delete a post any time.</p>
       <div className="grid">{items.map((p) => <WallItem key={p.id} post={p} onGone={(id) => setItems((xs) => xs.filter((x) => x.id !== id))} />)}</div>
-      {!busy && items.length === 0 && <p className="note">Nothing here yet. <Link href="/">Make your first post</Link>.</p>}
+      {!busy && !error && items.length === 0 && <p className="note">Nothing here yet. <Link href="/">Make your first post</Link>.</p>}
+      {error && <p className="error" role="alert">{error} <button type="button" onClick={() => void load(cursor)}>Try again</button></p>}
       {cursor && !busy && <button type="button" className="btn ghost" onClick={() => void load(cursor)}>Show more</button>}
     </div>
   );

@@ -68,8 +68,10 @@ export default function Composer() {
   }
 
   async function resend() {
-    await api('/auth/resend-verification', { method: 'POST' });
-    setMsg('Verification email sent. Check your inbox.');
+    try {
+      await api('/auth/resend-verification', { method: 'POST' });
+      setMsg('Verification email sent. Check your inbox.');
+    } catch (e) { setMsg((e as Error).message); }
   }
 
   if (loading) return null;
