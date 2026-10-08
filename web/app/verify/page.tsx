@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
@@ -9,12 +9,20 @@ function Verify() {
   const token = useSearchParams().get('token');
   const { refresh } = useAuth();
   const [state, setState] = useState<'working' | 'ok' | 'bad'>('working');
+  const pending = useRef<{ token: string; request: Promise<unknown> } | null>(null);
 
   useEffect(() => {
     if (!token) return setState('bad');
-    api(`/auth/verify?token=${encodeURIComponent(token)}`)
-      .then(() => { setState('ok'); return refresh(); })
-      .catch(() => setState('bad'));
+    let active = true;
+    setState('working');
+    // Strict Mode replays effects. Reuse the request so a one-use token isn't consumed twice.
+    if (pending.current?.token !== token) {
+      pending.current = { token, request: api(`/auth/verify?token=${encodeURIComponent(token)}`) };
+    }
+    pending.current.request
+      .then(() => { if (active) { setState('ok'); void refresh(); } })
+      .catch(() => { if (active) setState('bad'); });
+    return () => { active = false; };
   }, [token, refresh]);
 
   return (

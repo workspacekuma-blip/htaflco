@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, fmtDate, json } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Comment, Post } from '@/lib/types';
@@ -14,6 +14,11 @@ export default function PostCard({ post }: { post: Post }) {
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [text, setText] = useState('');
   const [msg, setMsg] = useState('');
+  const [reporting, setReporting] = useState(false);
+  const [reason, setReason] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+
+  useEffect(() => { setP(post); }, [post]);
 
   async function vote(v: 1 | -1) {
     if (!me) return setMsg('Log in to vote.');
@@ -30,8 +35,10 @@ export default function PostCard({ post }: { post: Post }) {
     const next = !open;
     setOpen(next);
     if (next && comments === null) {
-      const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`);
-      setComments(r.items);
+      try {
+        const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`);
+        setComments(r.items);
+      } catch (e) { setMsg((e as Error).message); }
     }
   }
 
@@ -52,13 +59,17 @@ export default function PostCard({ post }: { post: Post }) {
 
   async function report() {
     if (!me) return setMsg('Log in to report.');
-    const reason = window.prompt('What is wrong with this post?');
-    if (!reason || reason.trim().length < 3) return;
+    if (reason.trim().length < 3) return setMsg('Please describe the problem in at least three characters.');
+    setReportBusy(true);
     try {
       await api('/reports', { method: 'POST', body: json({ targetType: 'post', targetId: p.id, reason }) });
       setMsg('Thank you. A moderator will take a look.');
+      setReporting(false);
+      setReason('');
     } catch (e) {
       setMsg((e as Error).message);
+    } finally {
+      setReportBusy(false);
     }
   }
 
@@ -75,8 +86,19 @@ export default function PostCard({ post }: { post: Post }) {
           <button type="button" aria-label="Downvote" aria-pressed={p.myVote === -1} onClick={() => void vote(-1)}>▼</button>
         </span>
         <button type="button" onClick={() => void toggleComments()} aria-expanded={open}>Comment {p.commentCount}</button>
-        <button type="button" className="quiet" onClick={() => void report()}>Report</button>
+        <button type="button" className="quiet" onClick={() => me ? setReporting(!reporting) : setMsg('Log in to report.')}>Report</button>
       </div>
+      {reporting && (
+        <div className="comments">
+          <label>What is wrong with this post?
+            <textarea value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <div className="acts">
+            <button type="button" disabled={reportBusy} onClick={() => void report()}>{reportBusy ? 'Sending…' : 'Send report'}</button>
+            <button type="button" onClick={() => setReporting(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
       {msg && <p className="cardmsg" role="status">{msg}</p>}
       {open && (
         <div className="comments">
