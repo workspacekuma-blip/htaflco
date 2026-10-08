@@ -77,7 +77,36 @@ npx tsx scripts/dev-seed.ts --dev-only
 
 The script requires a loopback database, `APP_ORIGIN=http://localhost:3001`, and a non-production environment. It is never imported or run by the application. It creates 11 `Local QA seed` accounts, eight ranking candidates, 18 pagination posts, and trusted votes. All posts are explicitly labelled `LOCAL QA` and disposable. Do not copy the local database or its seed accounts into production.
 
-## Turn on pictures
+## Community posts, prompts and notifications
+
+Posts support a heading up to 100 characters, a story up to **10,000 characters** including its starter, and one response label: Encouragement, Constructive feedback, Looking for collaborators or Just sharing. Cards show the heading and first line; the full page contains all the text. Older posts keep their original text and use their pillar/craft as a display heading.
+
+Apply the additive upgrades to an existing installation before deploying the new API:
+
+```bash
+cd api
+npm run db:upgrade
+```
+
+New installations already include these changes in `db/schema.sql`. The upgrades were run against the local database and applied to the existing Supabase project; new tables have RLS and only the dedicated backend role can access them. Existing posts, votes and accounts are retained.
+
+Moderators schedule one prompt per Monday-start UTC week in `/admin`. Future prompts appear automatically during their week; no running scheduler is required. Members choose whether their post responds to the current prompt. `/weekly-prompt` shows its responses. No production prompt or sample story is seeded.
+
+Replies create a durable notification for the post author, excluding self-replies. `/notifications` shows replies, unread state and an optional email preference, off by default. Email contains a link, not the story or reply text. Unsubscribe requires confirmation with a POST and cannot sign a member in. The hosted worker claims jobs safely, retries temporary SMTP failures up to five times and recovers interrupted claims after ten minutes. `REPLY_EMAIL_DAILY_LIMIT` caps reply attempts at 100/day (0 pauses them), leaving Brevo capacity for verification; verification itself has separate existing rate limits. SMTP delivery is at least once: a crash between provider acceptance and recording success can cause a duplicate. Sleeping Render instances delay delivery until they wake.
+
+## Private pictures and videos with manual review
+
+The owner approved Supabase Free private storage and **human review**, not automated unsafe-content scanning. Set `MEDIA_REVIEW_MODE=manual` and the server-only `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`. `S3_PUBLIC_BASE` is not needed for this flow. An unset review mode keeps production uploads disabled.
+
+Use a **private** bucket, with a 10 MB provider limit and only `image/jpeg,image/png,image/webp,video/mp4`. The approved bucket is `htafl-media`. Supabase S3 credentials bypass storage RLS and can access every bucket in the project; store them only on the backend. Do not grant anonymous/authenticated bucket policies for this custom-account application. For other S3 providers allow browser PUT from the website origin. CORS is not authorization.
+
+Pictures selected in the browser may be up to 5 MB and are compressed before upload; the API accepts at most 2 MB of picture bytes. Sharp fully decodes/re-encodes still JPEG/PNG/WebP, limits inputs to 16 megapixels and strips metadata. Videos are one MP4 per post, up to 10,000,000 bytes and 30 seconds, at most 4K input. The approved `ffmpeg-static` dependency decodes and converts to H.264/AAC at up to 1280×720, removes metadata and disables external track/network protocols. One video transcode runs at a time, with bounded execution; a busy or failed save keeps the draft for retry.
+
+Upload URLs expire after five minutes and write staging keys only. The server writes a separate private validated object before attachment. Every media post starts pending, visible only to its active author and current moderators. Moderation provides the complete text and picture/video player, with Approve and publish or Hide. Public votes/comments/feeds exclude pending posts. Approval retains any distress flag. Direct media GET/HEAD and video range requests re-check database visibility; hiding/deleting a post blocks access without waiting for a signed download URL to expire.
+
+The hosted worker removes staging files older than a day and expired unattached/deleted-post objects, retaining attached validated objects. Interrupted processing can retry after five minutes. Supabase has no S3 lifecycle rules; cleanup and rankings pause while Render Free sleeps. Monitor the free storage/egress limits; this is not unlimited video hosting. Existing legacy picture URLs and password hashes are unchanged. See [storage and legacy preparation](api/storage/README.md).
+
+## Legacy local picture setup
 1. Create a bucket and an access key with your storage provider.
 2. Fill the `S3_*` values in `api/.env`. `S3_PUBLIC_BASE` is the public address the pictures are served from.
 3. Add a CORS rule to the bucket allowing `PUT` from your site address, for example:
@@ -87,7 +116,7 @@ The script requires a loopback database, `APP_ORIGIN=http://localhost:3001`, and
 ```
 The composer shows the picture button once the API reports uploads are on. Pictures are shrunk to a maximum 1200px dimension and converted to JPEG in the browser. The backend uses the approved Sharp dependency to validate file signatures and fully decode still JPEG, PNG and WebP contents, with a **16-megapixel** input limit. It rejects corrupt files, mismatched types, keys owned by another member and input/output exceeding **2,000,000 bytes**. Decoded pictures are resized to at most 1200px, oriented, stripped of embedded metadata and saved as JPEGs. See [Sharp's decoding options](https://sharp.pixelplumbing.com/api-constructor/).
 
-Signed upload links write only random `uploads/` staging keys. The server saves each validated attachment at a fresh `pictures/` key, so reusing or racing a staging upload link cannot overwrite an attached picture. Storage credentials now require server-side `GetObject` as well as `HeadObject` and `PutObject`. In production, keep the bucket private by default and allow public reads only under `pictures/`; staging uploads must remain private. Add lifecycle cleanup for staging uploads and unattached published objects. The local emulator does not enforce production bucket policies. Existing pre-fix picture URLs under `uploads/` are not migrated; replace those disposable QA attachments, or migrate/validate real legacy attachments before launch. No unsafe-content scanning service has been selected or activated.
+This legacy path is for local compatibility tests only, with an unset review mode and `S3_PUBLIC_BASE`. Its `pictures/` objects are publicly readable in the local emulator. Do not use that bucket policy in production: the approved manual-review path above keeps every object private. Existing pre-fix URLs are not migrated, and no automated unsafe-content scanner has been activated.
 
 For this verification, MinIO could not be used: Docker is absent and its official community Windows binary download returned HTTP 410. A loopback-only **S3rver test emulator** is prepared in `../.local-tools/s3/` and started by the Windows helper. The real browser successfully uploaded and displayed a picture through the existing presigned PUT and HeadObject flow. This proves the local flow, not compatibility, policies or scanning on a production storage provider. S3rver's CORS response permits `*`; configure your production bucket to allow your actual website origin. Its credentials are test-only and must never be used for a hosted bucket.
 
@@ -97,7 +126,7 @@ For STARTTLS, include `?requireTLS=true`. Without SMTP, local development prints
 If configured SMTP fails in production, the request returns 503 rather than claiming delivery succeeded. The created account remains unverified; sign in and resend verification after the provider recovers. Production logs do not include verification links or provider error details.
 
 ## Pages in the website
-`/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/posts/[id]` (full post, picture, author details, votes and comments), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
+`/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/posts/[id]` (full text, picture/video, votes and comments), `/weekly-prompt`, `/notifications`, `/notifications/unsubscribe`, `/about`, `/join`, `/login`, `/verify`, `/wall` (own published/pending/hidden posts, edit and delete), `/admin` (prompts, media review, reports and distress flags), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
 
 Post text and pictures link to the full post page; vote/report/comment buttons keep their own actions. Hidden, removed and deleted posts cannot be opened through a direct link. The footer uses the owner's supplied Instagram, X (Twitter) and TikTok `@htaflco` profiles. The `NEXT_PUBLIC_*` social variables remain optional overrides.
 
@@ -116,11 +145,13 @@ Every Featured computation atomically saves both the current ranking and that we
 ## Still to do before launch
 - **Privacy, Accessibility and Credits pages** are placeholders. The Community Guidelines page is a short draft. Get them written and checked against the rules that apply to your members.
 - **Safety:** `api/src/safety.ts` is a crude keyword check. Replace it with a proper classifier and a human review process. The post box shows a gentle message when a post is flagged: add support resources for your members' region (marked with a TODO in `web/components/Composer.tsx`).
-- **Pictures** are decoded, validated and re-encoded, but still need an owner-selected unsafe-content scanning process and production storage-policy verification.
-- **Video** is not included. **Account data export** is not included.
+- **Media safety:** pictures/videos are validated and require the approved human review. This does not identify unsafe content automatically. Confirm review coverage and handling of reports; review legacy pictures separately.
+- **Account data export** and built-in password reset are not included. Video captions/transcripts are not implemented; descriptions and native player controls are available.
 - Decide whether under-18s are in scope. That changes sign-up, privacy and safety rules.
 
 ## What has and hasn't been verified
+
+The community/media follow-up passed **51 API tests and 12 web tests**, both typechecks and builds, and both dependency audits reported zero known vulnerabilities. It includes 10,000-character boundaries, notification isolation/opt-out, actual local SMTP delivery and retry/budget checks, prompt rollover, private-picture moderation/range access/immutable attachments, and real MP4 conversion with audio, restart recovery and temporary-object cleanup. Six storage integration checks require the prepared local S3 server; none were skipped in this run. See [current community/media evidence](verification/COMMUNITY-MEDIA.md). Earlier verification below is historical.
 
 The post-details/loading follow-up passed **36 API tests and ten web tests**, both typechecks and both builds, then published frontend and backend commit `ec4ee72`. Fresh HTTPS checks through Netlify passed health, Latest, rejected anonymous posting/moderation, Origin rejection and a missing-post response. Local browser checks covered full text, pictures, comments, mobile layout, keyboard focus and social links; the disposable fixture was removed. Public browser verification remained blocked by DNS errors. Details and the Vercel Free assessment are in [verification/POSTS-AND-HOSTING.md](verification/POSTS-AND-HOSTING.md).
 
@@ -148,6 +179,6 @@ The hosted API health, security gates, database TLS and running worker have been
 
 ## Production preparation and Netlify
 
-Production picture publishing is disabled until an unsafe-content scanner is integrated. Storage policy templates, private quarantine preparation and legacy-password recovery requirements are documented in [api/storage/README.md](api/storage/README.md). The read-only inventory command is npm run legacy:audit in api/. Preparation never updates post URLs or passwords.
+Production uploads are disabled unless the owner-approved private manual-review setup is configured. AWS policy templates remain reference material for a different provider; Supabase activation uses its private bucket and server-only S3 credentials. Private quarantine preparation and legacy-password recovery requirements are documented in [api/storage/README.md](api/storage/README.md). The read-only inventory command is npm run legacy:audit in api/. Preparation never updates post URLs or passwords.
 
 The requested Netlify address is https://htaflco.netlify.app. Build settings and the hosted API/database prerequisites are in [verification/NETLIFY.md](verification/NETLIFY.md). Netlify builds refuse a missing or non-HTTPS API_URL rather than publishing a broken localhost proxy. The owner approved Supabase Free and Render Free; current setup and exact commands are in [verification/BACKEND.md](verification/BACKEND.md). No paid backend plan is configured in `render.yaml`.
