@@ -122,6 +122,8 @@ Every Featured computation atomically saves both the current ranking and that we
 
 ## What has and hasn't been verified
 
+The post-details/loading follow-up passed **36 API tests and ten web tests**, both typechecks and both builds, then published frontend and backend commit `ec4ee72`. Fresh HTTPS checks through Netlify passed health, Latest, rejected anonymous posting/moderation, Origin rejection and a missing-post response. Local browser checks covered full text, pictures, comments, mobile layout, keyboard focus and social links; the disposable fixture was removed. Public browser verification remained blocked by DNS errors. Details and the Vercel Free assessment are in [verification/POSTS-AND-HOSTING.md](verification/POSTS-AND-HOSTING.md).
+
 Verification was performed on **8 October 2026**, using Node 26.9.0, npm 11.19.1, PostgreSQL 17.11 and the Codex in-app browser. Both apps were installed and actually run. The API `/health` and the website `/api/health` proxy returned `{ "ok": true }`.
 
 ```bash
