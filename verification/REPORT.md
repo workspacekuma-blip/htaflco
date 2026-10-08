@@ -1,5 +1,7 @@
 # HTAFL local verification report
 
+Password handling, picture validation/overwrite protection and weekly archive recovery were subsequently fixed and tested. The slider wording now describes community picks rather than a raw upvote leaderboard. See [HARDENING.md](HARDENING.md) for the current results and limitations; those findings supersede the corresponding earlier risks below.
+
 Latest layout update (8 October 2026): the separate Featured tab/grid was removed at the owner's request. "On the wall right now" now reads the saved weekly top-five Featured feed. Rising is the default, with Latest and Browse retained. Existing backend ranking snapshots and weekly archive storage are unchanged; no archive browsing UI was added. Browser checks confirmed zero Featured tabs, five slider posts, Rising selected, 12 Latest posts and both Browse filters. Web typecheck, four tests and build passed. The first build attempt hit a sandbox filesystem restriction; the build passed with normal filesystem access. [Updated preview](featured-removed.jpg). The full-site findings below record the preceding verification layout.
 
 Date: 8 October 2026. Repository: `htafl-site/`. This report covers the supplied Express/PostgreSQL and Next.js draft. The earlier sibling prototype is separate. The original 49-file draft was committed before edits as `d7d4327`; subsequent commits preserve reviewable groups of changes. No paid service or production deployment was activated.

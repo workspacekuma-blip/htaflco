@@ -62,13 +62,13 @@ export default function PostSlider() {
           <button type="button" aria-pressed={paused} onClick={() => setPaused(!paused)}>{paused ? 'Play' : 'Pause'}</button>
         </div>
       </div>
-      <p className="note">The five most upvoted posts from the last seven days.</p>
+      <p className="note">Up to five community picks from the last seven days, chosen by votes and a fair mix of creators.</p>
       <div className="track" ref={track} tabIndex={0}
         onMouseEnter={() => (hover.current = true)} onMouseLeave={() => (hover.current = false)}
         onFocus={() => (hover.current = true)} onBlur={() => (hover.current = false)}>
         {posts === null && <p className="note">Loading…</p>}
         {error && <p className="error" role="alert">{error} <button type="button" onClick={() => void load()}>Try again</button></p>}
-        {!error && posts?.length === 0 && <p className="note">No featured posts yet. Upvote the posts you love and the top five appear here.</p>}
+        {!error && posts?.length === 0 && <p className="note">No community picks yet. Upvote the posts you love to help them appear here.</p>}
         {posts?.map((p) => <div className="slide" key={p.id}><PostCard post={p} /></div>)}
       </div>
     </section>

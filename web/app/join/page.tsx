@@ -56,8 +56,9 @@ export default function Join() {
           <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
         </label>
         <label>Password (at least 10 characters)
-          <input type="password" required minLength={10} maxLength={100} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+          <input type="password" required minLength={10} maxLength={100} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" aria-describedby="password-limit" />
         </label>
+        <p className="note" id="password-limit">Up to 72 bytes. Emoji and some other characters use more than one byte.</p>
         <fieldset className="chips">
           <legend>What do you create?</legend>
           {CRAFTS.map((c) => (

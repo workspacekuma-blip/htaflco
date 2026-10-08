@@ -32,6 +32,8 @@ npm run dev                     # site on http://localhost:3001
 
 Open **http://localhost:3001**. Use this address consistently: `APP_ORIGIN` is exactly `http://localhost:3001`, so writes from `http://127.0.0.1:3001` are rejected by the Origin check. Click "Join The Creator Generation", register, and (with no SMTP set) copy the verification link printed in the API terminal. Keep `REQUIRE_VERIFIED_EMAIL=true` when testing membership gates.
 
+Passwords require at least 10 characters and at most **72 UTF-8 bytes**. Both registration and login reject longer passwords rather than silently truncating them; emoji and some other characters use multiple bytes. Malformed Unicode is also rejected before bcrypt. Existing bcrypt hashes are unchanged. Any account previously created with an oversized password needs an owner-approved recovery/reset process before public launch; password reset is still not implemented.
+
 ### PostgreSQL without Docker
 
 Create a development database and a **different** test database, then apply the schema to the development database:
@@ -81,7 +83,9 @@ The script requires a loopback database, `APP_ORIGIN=http://localhost:3001`, and
 ```json
 [{ "AllowedOrigins": ["http://localhost:3001"], "AllowedMethods": ["PUT"], "AllowedHeaders": ["content-type"], "MaxAgeSeconds": 3000 }]
 ```
-The composer shows the picture button once the API reports uploads are on. Pictures are shrunk to a maximum 1200px dimension and converted to JPEG in the browser. The backend accepts JPEG, PNG and WebP metadata and rejects pictures larger than **2,000,000 bytes after upload**, or keys owned by another member. Also add a lifecycle rule to delete uploads never attached to a post.
+The composer shows the picture button once the API reports uploads are on. Pictures are shrunk to a maximum 1200px dimension and converted to JPEG in the browser. The backend uses the approved Sharp dependency to validate file signatures and fully decode still JPEG, PNG and WebP contents, with a **16-megapixel** input limit. It rejects corrupt files, mismatched types, keys owned by another member and input/output exceeding **2,000,000 bytes**. Decoded pictures are resized to at most 1200px, oriented, stripped of embedded metadata and saved as JPEGs. See [Sharp's decoding options](https://sharp.pixelplumbing.com/api-constructor/).
+
+Signed upload links write only random `uploads/` staging keys. The server saves each validated attachment at a fresh `pictures/` key, so reusing or racing a staging upload link cannot overwrite an attached picture. Storage credentials now require server-side `GetObject` as well as `HeadObject` and `PutObject`. In production, keep the bucket private by default and allow public reads only under `pictures/`; staging uploads must remain private. Add lifecycle cleanup for staging uploads and unattached published objects. The local emulator does not enforce production bucket policies. Existing pre-fix picture URLs under `uploads/` are not migrated; replace those disposable QA attachments, or migrate/validate real legacy attachments before launch. No unsafe-content scanning service has been selected or activated.
 
 For this verification, MinIO could not be used: Docker is absent and its official community Windows binary download returned HTTP 410. A loopback-only **S3rver test emulator** is prepared in `../.local-tools/s3/` and started by the Windows helper. The real browser successfully uploaded and displayed a picture through the existing presigned PUT and HeadObject flow. This proves the local flow, not compatibility, policies or scanning on a production storage provider. S3rver's CORS response permits `*`; configure your production bucket to allow your actual website origin. Its credentials are test-only and must never be used for a hosted bucket.
 
@@ -91,7 +95,9 @@ Set `SMTP_URL` (for example `smtp://user:pass@smtp.yourprovider.com:587`) and `M
 ## Pages in the website
 `/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
 
-"On the wall right now" reads the saved Featured ranking: the five most upvoted eligible posts from the last seven days, under the existing trust and fairness rules. The separate Featured tab/grid has been removed. Rising is the default tab. Saved rankings and the existing weekly `featured_archive` table/worker storage remain in the backend; there is no archive browsing section on the website.
+"On the wall right now" shows **up to five community picks** from posts created in the last seven days. The existing Featured ranking uses trusted up/down votes, Wilson confidence scoring, a minimum voter threshold, one post per author and at most two per craft. It is not a raw upvote-count leaderboard. The separate Featured tab/grid remains removed; Rising is the default tab.
+
+Every Featured computation atomically saves both the current ranking and that week's latest recorded list in `featured_archive`. Weeks start on Monday at 00:00 **UTC**. The current week's list updates; completed weeks remain frozen, so missing Sunday no longer loses the last successful computation. On restart, an older saved snapshot is recovered into its week before replacement. An archive storage failure rolls back the ranking update as well. Weeks with no recorded ranking cannot be reconstructed and are not fabricated. There is no archive browsing section on the website. The existing archive table needs no schema migration for this change.
 
 ## Put it on the internet (outline)
 - Host `web/` on a Next.js host. Host `api/` on any Node host. Use a managed PostgreSQL database.
@@ -102,7 +108,7 @@ Set `SMTP_URL` (for example `smtp://user:pass@smtp.yourprovider.com:587`) and `M
 ## Still to do before launch
 - **Privacy, Accessibility and Credits pages** are placeholders. The Community Guidelines page is a short draft. Get them written and checked against the rules that apply to your members.
 - **Safety:** `api/src/safety.ts` is a crude keyword check. Replace it with a proper classifier and a human review process. The post box shows a gentle message when a post is flagged: add support resources for your members' region (marked with a TODO in `web/components/Composer.tsx`).
-- **Pictures** are checked for type and size only. Add scanning for unsafe images.
+- **Pictures** are decoded, validated and re-encoded, but still need an owner-selected unsafe-content scanning process and production storage-policy verification.
 - **Social links:** set `NEXT_PUBLIC_INSTAGRAM_URL`, `NEXT_PUBLIC_X_URL`, `NEXT_PUBLIC_TIKTOK_URL` in `web/.env.local`. The footer icons appear when set.
 - **Video** is not included. **Account data export** is not included.
 - Decide whether under-18s are in scope. That changes sign-up, privacy and safety rules.
@@ -125,7 +131,7 @@ npm run build
 npm audit --audit-level=low
 ```
 
-All commands passed: **19 API tests** (eight original ranking tests plus 11 integration tests) and **four web API-client tests**. No tests were skipped during this machine's run. The storage integration test is explicitly skipped elsewhere unless `S3_ENDPOINT` names the prepared loopback server on port 9000. The database tests cover concurrent unique votes, switching/removing votes and counters, self-vote rejection, tied and microsecond keyset pagination, membership gates, Origin rejection, author-only changes, ranking exclusions/fairness, current moderator permissions, distress flags, hidden comments and local uploads. The web tests cover cookies, server errors, proxy failures and network failures. Both audits reported zero known vulnerabilities in the committed dependency versions at the time of verification.
+All commands passed: **24 API tests** (eight original ranking tests plus 16 integration tests) and **four web API-client tests**. No tests were skipped during this machine's run. The three storage integration tests are explicitly skipped elsewhere unless `S3_ENDPOINT` names the prepared loopback server on port 9000. The database tests cover concurrent unique votes, switching/removing votes and counters, self-vote rejection, tied and microsecond keyset pagination, membership gates, Origin rejection, author-only changes, ranking exclusions/fairness, current moderator permissions, distress flags, hidden comments, password byte/Unicode boundaries, weekly rollover/restart recovery, archive failure rollback and local picture validation. All three allowed picture formats were decoded/re-encoded; metadata stripping and staging-link replay without attachment replacement passed. The web tests cover cookies, server errors, proxy failures and network failures. The API audit reported zero known vulnerabilities after adding Sharp; the web dependency audit from the preceding verification also reported zero and its dependencies are unchanged.
 
 The real browser passed registration, console-link email verification, logout/login, text and picture posting, the distress support message, own-post vote rejection, up/down/removal, comments visible to two accounts, reporting, author editing and delete confirmation/cancellation, moderator report resolution/hiding/reviewing, Featured/Rising with trusted local votes, Latest pagination and Browse filters. Slider autoplay, pause and manual previous/next controls worked. At a 390px viewport the page had no horizontal overflow; dark mode and visible keyboard focus were checked. A failed save preserved its draft. An intentional API outage displayed a load error and **Try again** recovered after the API restarted. Privacy, Accessibility and Credits remain the requested placeholders.
 
