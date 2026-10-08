@@ -1,0 +1,102 @@
+'use client';
+import Link from 'next/link';
+import { useState } from 'react';
+import { api, fmtDate, json } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { Comment, Post } from '@/lib/types';
+
+type VoteResult = { up: number; down: number; score: number; myVote: 1 | -1 | null };
+
+export default function PostCard({ post }: { post: Post }) {
+  const { me } = useAuth();
+  const [p, setP] = useState(post);
+  const [open, setOpen] = useState(false);
+  const [comments, setComments] = useState<Comment[] | null>(null);
+  const [text, setText] = useState('');
+  const [msg, setMsg] = useState('');
+
+  async function vote(v: 1 | -1) {
+    if (!me) return setMsg('Log in to vote.');
+    try {
+      const r = await api<VoteResult>(`/posts/${p.id}/vote`, { method: 'PUT', body: json({ value: p.myVote === v ? 0 : v }) });
+      setP({ ...p, ...r });
+      setMsg('');
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
+
+  async function toggleComments() {
+    const next = !open;
+    setOpen(next);
+    if (next && comments === null) {
+      const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`);
+      setComments(r.items);
+    }
+  }
+
+  async function addComment() {
+    const body = text.trim();
+    if (!body) return;
+    try {
+      await api(`/posts/${p.id}/comments`, { method: 'POST', body: json({ body }) });
+      const r = await api<{ items: Comment[] }>(`/posts/${p.id}/comments`);
+      setComments(r.items);
+      setP({ ...p, commentCount: r.items.length });
+      setText('');
+      setMsg('');
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
+
+  async function report() {
+    if (!me) return setMsg('Log in to report.');
+    const reason = window.prompt('What is wrong with this post?');
+    if (!reason || reason.trim().length < 3) return;
+    try {
+      await api('/reports', { method: 'POST', body: json({ targetType: 'post', targetId: p.id, reason }) });
+      setMsg('Thank you. A moderator will take a look.');
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
+
+  return (
+    <article className="card">
+      {/* Plain img on purpose: pictures come from your own storage domain */}
+      {p.mediaUrl && <img className="cardimg" src={p.mediaUrl} alt={`Picture shared by ${p.author}`} loading="lazy" />}
+      <p className="cardtext">{p.body}</p>
+      <p className="cardmeta">{p.author} &middot; {p.pillar} &middot; {fmtDate(p.createdAt)}{p.editedAt ? ' · edited' : ''}</p>
+      <div className="acts">
+        <span className="vote">
+          <button type="button" aria-label="Upvote" aria-pressed={p.myVote === 1} onClick={() => void vote(1)}>▲</button>
+          <span className="sc" aria-label="Score">{p.score}</span>
+          <button type="button" aria-label="Downvote" aria-pressed={p.myVote === -1} onClick={() => void vote(-1)}>▼</button>
+        </span>
+        <button type="button" onClick={() => void toggleComments()} aria-expanded={open}>Comment {p.commentCount}</button>
+        <button type="button" className="quiet" onClick={() => void report()}>Report</button>
+      </div>
+      {msg && <p className="cardmsg" role="status">{msg}</p>}
+      {open && (
+        <div className="comments">
+          <ul>
+            {(comments ?? []).map((c) => (
+              <li key={c.id}><strong>{c.author}:</strong> {c.body}</li>
+            ))}
+            {comments && comments.length === 0 && <li>No comments yet. Say something kind.</li>}
+          </ul>
+          {me ? (
+            <div className="row">
+              <input type="text" value={text} maxLength={500} placeholder="Write a comment" aria-label="Write a comment"
+                onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void addComment()} />
+              <button type="button" className="btn small" onClick={() => void addComment()}>Post</button>
+            </div>
+          ) : (
+            <p><Link href="/join">Join</Link> or <Link href="/login">log in</Link> to comment.</p>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
