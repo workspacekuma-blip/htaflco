@@ -26,6 +26,10 @@ export async function sendVerification(to: string, token: string): Promise<void>
       text: `Welcome to The Creator Generation.\n\nVerify your email to start posting:\n${link}\n\nIf you did not sign up, you can ignore this email.`,
     });
   } catch (e) {
-    console.error('Could not send verification email', e); // never block sign-up on email trouble
+    if (config.isProd) {
+      console.error('Verification email delivery failed');
+      throw new HttpError(503, 'Verification email could not be sent. Sign in and try resending it.');
+    }
+    console.error('Could not send verification email', e);
   }
 }

@@ -92,6 +92,7 @@ For this verification, MinIO could not be used: Docker is absent and its officia
 ## Turn on email
 Set `SMTP_URL` (for example `smtp://user:pass@smtp.yourprovider.com:587`) and `MAIL_FROM` in `api/.env`.
 For STARTTLS, include `?requireTLS=true`. Without SMTP, local development prints verification links; production registration returns 503 before creating an account and never prints a verification token. Render Free blocks ports 25, 465 and 587. The owner approved Brevo Free (300 sends/day) on port 2525; its activation and live delivery test remain pending. mail.com remains the contact inbox, not the production SMTP relay.
+If configured SMTP fails in production, the request returns 503 rather than claiming delivery succeeded. The created account remains unverified; sign in and resend verification after the provider recovers. Production logs do not include verification links or provider error details.
 
 ## Pages in the website
 `/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.

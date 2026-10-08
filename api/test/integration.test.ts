@@ -106,6 +106,23 @@ test('production picture publishing stays disabled until a scanning provider is 
     ]).catch(e=>{console.error(e);process.exit(1)});
   `], { env: { ...process.env, NODE_ENV: 'production' }, timeout: 15000 });
 });
+
+test('production email delivery failure is reported without logging a verification token', async () => {
+  const result = await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
+    const assert=require('node:assert/strict'); const net=require('node:net');
+    (async()=>{
+      const smtp=net.createServer(socket=>socket.end('421 Temporary delivery failure\\r\\n'));
+      await new Promise(resolve=>smtp.listen(0,'127.0.0.1',resolve));
+      process.env.SMTP_URL='smtp://127.0.0.1:'+smtp.address().port;
+      const {sendVerification}=require('./src/mailer');
+      try {await assert.rejects(sendVerification('delivery@example.test','test-only-verification-token'),e=>e.status===503)}
+      finally {await new Promise(resolve=>smtp.close(resolve))}
+      console.log('delivery failure verified');
+    })().catch(e=>{console.error(e);process.exit(1)});
+  `], { env: { ...process.env, NODE_ENV: 'production' }, timeout: 15000 });
+  assert.match(result.stdout, /delivery failure verified/);
+  assert.doesNotMatch(result.stdout + result.stderr, /test-only-verification-token|verify\?token=/);
+});
 test('password limits reject bcrypt truncation in registration and login, including UTF-8', async () => {
   for (const password of ['a'.repeat(73), '🔐'.repeat(19)]) {
     const email = `${randomBytes(8).toString('hex')}@example.test`;
