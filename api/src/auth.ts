@@ -36,18 +36,28 @@ export function readSession(req: Request, _res: Response, next: NextFunction) {
   next();
 }
 
-export function requireAuth(req: Request, _res: Response, next: NextFunction) {
-  if (!(req as Authed).user) return next(new HttpError(401, 'Sign in to continue'));
-  next();
+async function activeUser(req: Request) {
+  const session = (req as Authed).user;
+  if (!session) throw new HttpError(401, 'Sign in to continue');
+  const { rows } = await pool.query('SELECT id, role, status FROM users WHERE id = $1', [session.id]);
+  if (!rows[0] || rows[0].status !== 'active') throw new HttpError(403, 'This account is unavailable');
+  // Permissions can change during the seven-day session; the database is authoritative.
+  const user = { id: rows[0].id as string, role: rows[0].role as string };
+  (req as Authed).user = user;
+  return user;
 }
 
+export const requireAuth = ah(async (req, _res, next) => {
+  await activeUser(req);
+  next();
+});
+
 export function requireRole(...roles: string[]) {
-  return (req: Request, _res: Response, next: NextFunction) => {
-    const u = (req as Authed).user;
-    if (!u) return next(new HttpError(401, 'Sign in to continue'));
-    if (!roles.includes(u.role)) return next(new HttpError(403, 'Not allowed'));
+  return ah(async (req, _res, next) => {
+    const u = await activeUser(req);
+    if (!roles.includes(u.role)) throw new HttpError(403, 'Not allowed');
     next();
-  };
+  });
 }
 
 /** Registered members only: profile exists, account active, email verified (unless turned off). */

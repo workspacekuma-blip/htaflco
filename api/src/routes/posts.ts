@@ -97,6 +97,8 @@ postsRouter.put('/posts/:id/vote', requireMember, perUser(120, 3600_000), ah(asy
 // Comments (oldest first). TODO: paginate once threads get long.
 postsRouter.get('/posts/:id/comments', ah(async (req, res) => {
   const postId = id.parse(req.params.id);
+  const post = await pool.query("SELECT 1 FROM posts WHERE id = $1 AND status = 'published'", [postId]);
+  if (!post.rowCount) throw new HttpError(404, 'Post not found');
   const { rows } = await pool.query(
     `SELECT c.id, c.body, c.created_at AS "createdAt", pr.display_name AS author
        FROM comments c JOIN profiles pr ON pr.user_id = c.author_id

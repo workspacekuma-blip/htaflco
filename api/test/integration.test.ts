@@ -1,0 +1,171 @@
+import 'dotenv/config';
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { after, before, beforeEach, test } from 'node:test';
+import type { Server } from 'node:http';
+import jwt from 'jsonwebtoken';
+import { Pool } from 'pg';
+
+// Fail closed: never fall back to the development or production database.
+const url = process.env.TEST_DATABASE_URL;
+if (!url || !new URL(url).pathname.endsWith('_test')) {
+  throw new Error('Set TEST_DATABASE_URL to a dedicated database whose name ends in _test. Tests clear that database.');
+}
+if (url === process.env.DATABASE_URL) throw new Error('Test and application databases must differ');
+process.env.DATABASE_URL = url;
+process.env.JWT_SECRET = randomBytes(48).toString('hex');
+process.env.REQUIRE_VERIFIED_EMAIL = 'true';
+process.env.APP_ORIGIN = 'http://localhost:3001';
+process.env.FEATURED_MIN_VOTERS = '3';
+process.env.RISING_MIN_VOTERS = '3';
+const { app } = require('../src/server') as typeof import('../src/server');
+const { pool } = require('../src/db') as typeof import('../src/db');
+const { computeFeatured, computeRising } = require('../src/ranking/worker') as typeof import('../src/ranking/worker');
+let server: Server;
+let base: string;
+type User = { id: string; cookie: string };
+
+before(async () => {
+  const bootstrap = new Pool({ connectionString: url });
+  await bootstrap.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public');
+  await bootstrap.query(readFileSync('db/schema.sql', 'utf8'));
+  await bootstrap.end();
+  server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+});
+after(async () => {
+  if (server) await new Promise<void>((resolve, reject) => server.close((e) => e ? reject(e) : resolve()));
+  await pool.end();
+});
+beforeEach(async () => {
+  await pool.query('TRUNCATE users, ranking_snapshots, featured_archive CASCADE');
+});
+async function user(verified = true, role = 'member'): Promise<User> {
+  const { rows } = await pool.query(
+    `INSERT INTO users(email,password_hash,email_verified,role,created_at)
+     VALUES ($1,'test-only-not-a-login-hash',$2,$3,now()-interval '2 days') RETURNING id`,
+    [`${randomBytes(8).toString('hex')}@example.test`, verified, role],
+  );
+  const id = rows[0].id;
+  await pool.query("INSERT INTO profiles(user_id,display_name,craft) VALUES($1,'Test member','Art')", [id]);
+  return { id, cookie: `htafl_session=${jwt.sign({ sub: id, role }, process.env.JWT_SECRET!, { expiresIn: '1h' })}` };
+}
+async function post(author: User, body = 'Test-only post') {
+  return (await pool.query('INSERT INTO posts(author_id,body,pillar,craft) VALUES($1,$2,\'Create\',\'Art\') RETURNING id', [author.id, body])).rows[0].id as string;
+}
+async function request(path: string, method = 'GET', u?: User, body?: unknown, origin = 'http://localhost:3001') {
+  const response = await fetch(base + path, { method, headers: {
+    origin, 'content-type': 'application/json', ...(u ? { cookie: u.cookie } : {}),
+  }, body: body === undefined ? undefined : JSON.stringify(body) });
+  return { status: response.status, body: await response.json() as any };
+}
+async function vote(id: string, u: User, value: number) { return request(`/posts/${id}/vote`, 'PUT', u, { value }); }
+async function counters(id: string) {
+  return (await pool.query('SELECT up,down FROM posts WHERE id=$1', [id])).rows[0];
+}
+
+test('health connects to real PostgreSQL', async () => {
+  assert.deepEqual(await request('/health'), { status: 200, body: { ok: true } });
+});
+test('concurrent repeated votes remain unique; changing and removing preserve counters', async () => {
+  const id = await post(await user()); const voter = await user();
+  const responses = await Promise.all(Array.from({ length: 8 }, () => vote(id, voter, 1)));
+  assert.ok(responses.every((r) => r.status === 200));
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM votes WHERE post_id=$1', [id])).rows[0].n, 1);
+  assert.deepEqual(await counters(id), { up: 1, down: 0 });
+  assert.equal((await vote(id, voter, -1)).status, 200);
+  assert.deepEqual(await counters(id), { up: 0, down: 1 });
+  await vote(id, voter, 0); await vote(id, voter, 0);
+  assert.deepEqual(await counters(id), { up: 0, down: 0 });
+  await vote(id, voter, -1); await vote(id, voter, 1);
+  assert.deepEqual(await counters(id), { up: 1, down: 0 });
+});
+test('self-voting is forbidden and leaves no vote', async () => {
+  const author = await user(); const id = await post(author);
+  for (const value of [1, -1, 0]) assert.equal((await vote(id, author, value)).status, 403);
+  assert.deepEqual(await counters(id), { up: 0, down: 0 });
+});
+test('keyset pagination preserves equal timestamps and microseconds without duplicates', async () => {
+  const author = await user();
+  for (let i = 0; i < 31; i++) {
+    const id = await post(author, `Pagination ${i}`);
+    await pool.query("UPDATE posts SET created_at='2026-01-01T00:00:00Z'::timestamptz + $1 * interval '1 microsecond' WHERE id=$2", [i % 7, id]);
+  }
+  const expected = (await pool.query('SELECT id FROM posts ORDER BY created_at DESC,id DESC')).rows.map((r) => r.id);
+  const seen: string[] = []; let cursor: string | null = null;
+  do {
+    const r = await request(`/feed/latest?limit=4${cursor ? `&cursor=${cursor}` : ''}`);
+    assert.equal(r.status, 200); seen.push(...r.body.items.map((p: any) => p.id)); cursor = r.body.nextCursor;
+    assert.ok(seen.length <= 31, 'pagination must terminate');
+  } while (cursor);
+  assert.deepEqual(seen, expected); assert.equal(new Set(seen).size, 31);
+});
+test('member gates reject anonymous, unverified, suspended and profileless accounts; Origin remains enforced', async () => {
+  const id = await post(await user()); const unverified = await user(false); const suspended = await user(); const profileless = await user();
+  await pool.query("UPDATE users SET status='suspended' WHERE id=$1", [suspended.id]);
+  await pool.query('DELETE FROM profiles WHERE user_id=$1', [profileless.id]);
+  for (const [u, status] of [[undefined, 401], [unverified, 403], [suspended, 403], [profileless, 403]] as const) {
+    assert.equal((await request('/posts', 'POST', u, { body: 'Gate test' })).status, status);
+    assert.equal((await vote(id, u as User, 1)).status, status);
+    assert.equal((await request(`/posts/${id}/comments`, 'POST', u, { body: 'Gate test' })).status, status);
+    assert.equal((await request('/media/upload-url', 'POST', u, { contentType: 'image/jpeg' })).status, status);
+  }
+  assert.equal((await request('/posts', 'POST', await user(), { body: 'Forged origin' }, 'https://evil.example')).status, 403);
+  assert.equal((await request('/admin/reports')).status, 401);
+  assert.equal((await request('/admin/reports', 'GET', await user())).status, 403);
+});
+test('only author edits/deletes; moderation can remove but cannot rewrite another author', async () => {
+  const author = await user(); const other = await user(); const moderator = await user(true, 'moderator'); const id = await post(author);
+  assert.equal((await request(`/posts/${id}`, 'PATCH', other, { body: 'Hijack' })).status, 404);
+  assert.equal((await request(`/posts/${id}`, 'DELETE', other)).status, 403);
+  assert.equal((await request(`/posts/${id}`, 'PATCH', moderator, { body: 'Hijack' })).status, 404);
+  assert.equal((await request(`/posts/${id}`, 'PATCH', author, { body: 'Edited' })).status, 200);
+  assert.equal((await request('/me/wall', 'GET', author)).body.items[0].body, 'Edited');
+  assert.equal((await request(`/posts/${id}`, 'DELETE', author)).status, 200);
+  assert.equal((await request('/me/wall', 'GET', author)).body.items.length, 0);
+});
+test('Featured eligibility and fairness use real trusted votes; Rising excludes Featured', async () => {
+  const a = await user(); const b = await user(); const c = await user();
+  const ids = [await post(a), await post(a), await post(b), await post(c), await post(await user()), await post(await user())];
+  await pool.query("UPDATE posts SET sensitive=true WHERE id=$1", [ids[4]]);
+  await pool.query("INSERT INTO reports(reporter_id,target_type,target_id,reason) VALUES($1,'post',$2,'Test report')", [b.id, ids[5]]);
+  const voters = [await user(), await user(), await user()];
+  for (const id of ids) for (const voter of voters) assert.equal((await vote(id, voter, 1)).status, 200);
+  const featured = await computeFeatured();
+  assert.equal(featured.length, 2); // all Art: maximum two per craft
+  assert.ok(!featured.includes(ids[4]) && !featured.includes(ids[5]));
+  const authors = (await pool.query('SELECT author_id FROM posts WHERE id=ANY($1::uuid[])', [featured])).rows.map((r) => r.author_id);
+  assert.equal(authors.length, new Set(authors).size);
+  const rising = await computeRising(featured);
+  assert.ok(rising.length > 0 && rising.every((id) => !featured.includes(id) && id !== ids[4] && id !== ids[5]));
+});
+test('new report or distress edit disappears from saved rankings immediately', async () => {
+  const author = await user(); const reporter = await user(); const id = await post(author);
+  await pool.query("INSERT INTO ranking_snapshots(kind,items) VALUES('featured',$1::jsonb)", [JSON.stringify([id])]);
+  assert.equal((await request('/feed/featured')).body.items.length, 1);
+  await request('/reports', 'POST', reporter, { targetType: 'post', targetId: id, reason: 'Needs review' });
+  assert.equal((await request('/feed/featured')).body.items.length, 0);
+  await pool.query("UPDATE reports SET status='resolved'");
+  await request(`/posts/${id}`, 'PATCH', author, { body: 'I want to hurt myself' });
+  assert.equal((await request('/feed/featured')).body.items.length, 0);
+});
+test('moderator promotion, demotion and suspension take effect with the existing session', async () => {
+  const member = await user();
+  await pool.query("UPDATE users SET role='moderator' WHERE id=$1", [member.id]);
+  assert.equal((await request('/admin/reports', 'GET', member)).status, 200);
+  const moderator = await user(true, 'moderator');
+  await pool.query("UPDATE users SET role='member' WHERE id=$1", [moderator.id]);
+  assert.equal((await request('/admin/reports', 'GET', moderator)).status, 403);
+  await pool.query("UPDATE users SET role='moderator',status='suspended' WHERE id=$1", [moderator.id]);
+  assert.equal((await request('/admin/reports', 'GET', moderator)).status, 403);
+});
+test('distress notice is retained and hidden post comments are not publicly exposed', async () => {
+  const author = await user();
+  const r = await request('/posts', 'POST', author, { body: 'I do not want to hurt myself' });
+  assert.equal(r.status, 201); assert.equal(r.body.supportNotice, true);
+  await request(`/posts/${r.body.id}/comments`, 'POST', author, { body: 'Private after hiding' });
+  await pool.query("UPDATE posts SET status='hidden' WHERE id=$1", [r.body.id]);
+  assert.equal((await request(`/posts/${r.body.id}/comments`)).status, 404);
+});

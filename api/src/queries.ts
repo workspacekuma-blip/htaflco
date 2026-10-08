@@ -74,7 +74,9 @@ export async function feedPage(
 export async function hydrate(viewerId: string | null, ids: string[]) {
   if (ids.length === 0) return [];
   const { rows } = await pool.query<Row>(
-    `${POST_SELECT} WHERE p.id = ANY($2::uuid[]) AND p.status = 'published'`,
+    `${POST_SELECT} WHERE p.id = ANY($2::uuid[]) AND p.status = 'published'
+      AND NOT p.sensitive
+      AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.target_type = 'post' AND r.target_id = p.id AND r.status = 'open')`,
     [viewerId, ids],
   );
   const byId = new Map(rows.map((r) => [r.id, r]));

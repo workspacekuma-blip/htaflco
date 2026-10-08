@@ -11,7 +11,7 @@ import { postsRouter } from './routes/posts';
 import { mediaRouter } from './routes/media';
 import { reportsRouter } from './routes/reports';
 
-const app = express();
+export const app = express();
 app.disable('x-powered-by');
 if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 app.use(helmet());
@@ -42,4 +42,6 @@ app.use(mediaRouter);
 app.use(reportsRouter);
 app.use(errorHandler);
 
-app.listen(config.port, () => console.log(`HTAFL API listening on http://localhost:${config.port}`));
+if (require.main === module) {
+  app.listen(config.port, () => console.log(`HTAFL API listening on http://localhost:${config.port}`));
+}
