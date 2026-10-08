@@ -18,7 +18,7 @@ export default function PostSlider() {
     const version = ++request.current;
     setError('');
     try {
-      const r = await api<Page>('/feed/latest?limit=12');
+      const r = await api<Page>('/feed/featured');
       if (version === request.current) setPosts(r.items);
     } catch (e) {
       if (version === request.current) { setError((e as Error).message); setPosts([]); }
@@ -62,12 +62,13 @@ export default function PostSlider() {
           <button type="button" aria-pressed={paused} onClick={() => setPaused(!paused)}>{paused ? 'Play' : 'Pause'}</button>
         </div>
       </div>
+      <p className="note">The five most upvoted posts from the last seven days.</p>
       <div className="track" ref={track} tabIndex={0}
         onMouseEnter={() => (hover.current = true)} onMouseLeave={() => (hover.current = false)}
         onFocus={() => (hover.current = true)} onBlur={() => (hover.current = false)}>
         {posts === null && <p className="note">Loading…</p>}
         {error && <p className="error" role="alert">{error} <button type="button" onClick={() => void load()}>Try again</button></p>}
-        {!error && posts?.length === 0 && <p className="note">No posts yet. Be the first on the wall.</p>}
+        {!error && posts?.length === 0 && <p className="note">No featured posts yet. Upvote the posts you love and the top five appear here.</p>}
         {posts?.map((p) => <div className="slide" key={p.id}><PostCard post={p} /></div>)}
       </div>
     </section>

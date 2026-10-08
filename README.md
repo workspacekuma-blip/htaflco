@@ -89,7 +89,9 @@ For this verification, MinIO could not be used: Docker is absent and its officia
 Set `SMTP_URL` (for example `smtp://user:pass@smtp.yourprovider.com:587`) and `MAIL_FROM` in `api/.env`.
 
 ## Pages in the website
-`/` home (slider, Featured, Rising, Latest, Browse, post box), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
+`/` home (weekly top-five slider, Rising, Latest, Browse, post box), `/about`, `/join`, `/login`, `/verify`, `/wall` (your posts with edit and delete), `/admin` (moderators), `/info/privacy`, `/info/accessibility`, `/info/guidelines`, `/info/credits`.
+
+"On the wall right now" reads the saved Featured ranking: the five most upvoted eligible posts from the last seven days, under the existing trust and fairness rules. The separate Featured tab/grid has been removed. Rising is the default tab. Saved rankings and the existing weekly `featured_archive` table/worker storage remain in the backend; there is no archive browsing section on the website.
 
 ## Put it on the internet (outline)
 - Host `web/` on a Next.js host. Host `api/` on any Node host. Use a managed PostgreSQL database.
