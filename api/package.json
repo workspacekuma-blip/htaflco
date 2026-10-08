@@ -11,6 +11,7 @@
     "build": "tsc",
     "start": "node dist/src/server.js",
     "rank": "tsx src/ranking/worker.ts",
+    "legacy:audit": "tsx scripts/legacy-media.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

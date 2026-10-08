@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { after, before, beforeEach, test } from 'node:test';
 import type { Server } from 'node:http';
@@ -70,6 +73,16 @@ async function counters(id: string) {
 
 test('health connects to real PostgreSQL', async () => {
   assert.deepEqual(await request('/health'), { status: 200, body: { ok: true } });
+});
+test('production picture publishing stays disabled until a scanning provider is implemented', async () => {
+  await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
+    const assert=require('node:assert/strict'); const media=require('./src/media');
+    assert.equal(media.mediaEnabled,false);
+    Promise.all([
+      assert.rejects(media.presignUpload('test','image/jpeg'),e=>e.status===503),
+      assert.rejects(media.verifiedUrl('test','uploads/test/image.jpg'),e=>e.status===503)
+    ]).catch(e=>{console.error(e);process.exit(1)});
+  `], { env: { ...process.env, NODE_ENV: 'production' }, timeout: 15000 });
 });
 test('password limits reject bcrypt truncation in registration and login, including UTF-8', async () => {
   for (const password of ['a'.repeat(73), '🔐'.repeat(19)]) {
@@ -295,4 +308,35 @@ test('local S3 fully decodes JPEG, PNG and WebP, rotates and strips embedded met
     assert.equal(metadata.orientation, undefined);
     assert.ok((await sharp(output).raw().toBuffer()).length > 0);
   }
+});
+test('legacy audit is read-only; preparation writes quarantine and a manifest without changing posts or passwords', {
+  skip: !/^http:\/\/(localhost|127\.0\.0\.1):9000$/.test(process.env.S3_ENDPOINT ?? ''),
+}, async () => {
+  const author = await user(); const id = await post(author);
+  const signed = await request('/media/upload-url', 'POST', author, { contentType: 'image/png' });
+  assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: readFileSync('../scripts/fixtures/upload-test.png') })).ok);
+  const originalUrl = `${process.env.S3_PUBLIC_BASE}/${signed.body.key}`;
+  await pool.query('UPDATE posts SET media_url=$1 WHERE id=$2', [originalUrl, id]);
+  const original = (await pool.query('SELECT media_url,status FROM posts WHERE id=$1', [id])).rows[0];
+  const hash = (await pool.query('SELECT password_hash FROM users WHERE id=$1', [author.id])).rows[0].password_hash;
+  const run = (...args: string[]) => promisify(execFile)(process.execPath,
+    ['node_modules/tsx/dist/cli.mjs', 'scripts/legacy-media.ts', ...args],
+    { env: { ...process.env, NODE_ENV: 'production' }, timeout: 15000 });
+  const audit = JSON.parse((await run()).stdout);
+  assert.equal(audit.mode, 'read-only'); assert.equal(audit.legacyPictures, 1);
+  assert.equal(audit.passwords.originalByteLengthUnknown, 1);
+  assert.equal(audit.postsUpdated, 0); assert.equal(audit.passwordsChanged, 0);
+  const output = join(tmpdir(), `htafl-legacy-${randomBytes(12).toString('hex')}.local.json`);
+  try {
+    const prepared = JSON.parse((await run('--prepare', '--output', output)).stdout);
+    assert.equal(prepared.prepared, 1); assert.equal(prepared.scanningActivated, false);
+    const manifest = JSON.parse(await readFile(output, 'utf8'));
+    assert.equal(manifest.entries[0].state, 'awaiting-scan');
+    assert.ok(manifest.entries[0].quarantineKey.startsWith(`quarantine/legacy/${id}/`));
+    assert.match(manifest.entries[0].sha256, /^[0-9a-f]{64}$/);
+    assert.ok(!(await readFile(output, 'utf8')).includes(hash));
+    await assert.rejects(run('--prepare', '--output', output), /EEXIST/);
+    assert.deepEqual((await pool.query('SELECT media_url,status FROM posts WHERE id=$1', [id])).rows[0], original);
+    assert.equal((await pool.query('SELECT password_hash FROM users WHERE id=$1', [author.id])).rows[0].password_hash, hash);
+  } finally { await unlink(output).catch(() => {}); }
 });
