@@ -20,7 +20,11 @@ function Verify() {
       pending.current = { token, request: api(`/auth/verify?token=${encodeURIComponent(token)}`) };
     }
     pending.current.request
-      .then(() => { if (active) { setState('ok'); void refresh(); } })
+      .then(async () => {
+        if (!active) return;
+        await refresh();
+        if (active) setState('ok');
+      })
       .catch(() => { if (active) setState('bad'); });
     return () => { active = false; };
   }, [token, refresh]);
@@ -28,7 +32,7 @@ function Verify() {
   return (
     <div className="wrap page">
       {state === 'working' && <p>Verifying your email…</p>}
-      {state === 'ok' && (<><h1 className="h2">Email verified.</h1><p>You can post, vote and comment now.</p><Link className="btn" href="/">Go to the wall</Link></>)}
+      {state === 'ok' && (<><h1 className="h2">Email verified.</h1><p>You’re signed in and can post, vote and comment now.</p><Link className="btn" href="/">Go to the wall</Link></>)}
       {state === 'bad' && (<><h1 className="h2">That link did not work.</h1><p>It may have expired. Log in and ask for a new verification email from the post box.</p><Link className="btn" href="/login">Log in</Link></>)}
     </div>
   );

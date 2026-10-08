@@ -34,6 +34,8 @@ Open **http://localhost:3001**. Use this address consistently: `APP_ORIGIN` is e
 
 Passwords require at least 10 characters and at most **72 UTF-8 bytes**. Both registration and login reject longer passwords rather than silently truncating them; emoji and some other characters use multiple bytes. Malformed Unicode is also rejected before bcrypt. Existing bcrypt hashes are unchanged. Any account previously created with an oversized password needs an owner-approved recovery/reset process before public launch; password reset is still not implemented.
 
+Opening a valid email verification link also signs in that active account, even in a browser that was signed out. The website refreshes the account before displaying success. Links are consumed once, so reopening a used link cannot create another session. Suspended accounts cannot redeem links. Session cookies retain HttpOnly, SameSite=Lax, a seven-day lifetime and Secure in production; verification responses use `Cache-Control: no-store`.
+
 ### PostgreSQL without Docker
 
 Create a development database and a **different** test database, then apply the schema to the development database:

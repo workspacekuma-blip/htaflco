@@ -80,12 +80,14 @@ authRouter.post('/logout', (_req, res) => {
 });
 
 authRouter.get('/verify', ah(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   const token = z.string().min(10).parse(req.query.token);
-  const { rowCount } = await pool.query(
-    'UPDATE users SET email_verified = true, verify_token = NULL WHERE verify_token = $1',
+  const { rows } = await pool.query(
+    "UPDATE users SET email_verified = true, verify_token = NULL WHERE verify_token = $1 AND status = 'active' RETURNING id, role",
     [token],
   );
-  if (!rowCount) throw new HttpError(400, 'That verification link is not valid');
+  if (!rows[0]) throw new HttpError(400, 'That verification link is not valid');
+  signSession(res, { id: rows[0].id, role: rows[0].role });
   res.json({ ok: true });
 }));
 

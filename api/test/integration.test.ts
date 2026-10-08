@@ -74,6 +74,76 @@ async function counters(id: string) {
 test('health connects to real PostgreSQL', async () => {
   assert.deepEqual(await request('/health'), { status: 200, body: { ok: true } });
 });
+test('verification signs a signed-out member in and permits participation', async () => {
+  const member = await user(false);
+  const token = randomBytes(24).toString('hex');
+  await pool.query('UPDATE users SET verify_token=$1 WHERE id=$2', [token, member.id]);
+  const response = await fetch(`${base}/auth/verify?token=${token}`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const session = response.headers.get('set-cookie');
+  assert.ok(session, 'Verification must create a session for a signed-out visitor');
+  assert.match(session, /HttpOnly/i);
+  assert.match(session, /SameSite=Lax/i);
+  const signedIn = { id: member.id, cookie: session.split(';')[0] };
+  const me = await request('/auth/me', 'GET', signedIn);
+  assert.equal(me.status, 200);
+  assert.equal(me.body.id, member.id);
+  assert.equal(me.body.emailVerified, true);
+  assert.equal((await request('/posts', 'POST', signedIn, { body: 'Verification test post', pillar: 'Create', craft: 'Art' })).status, 201);
+  assert.deepEqual((await pool.query('SELECT email_verified,verify_token FROM users WHERE id=$1', [member.id])).rows[0], { email_verified: true, verify_token: null });
+  const replay = await fetch(`${base}/auth/verify?token=${token}`);
+  assert.equal(replay.status, 400);
+  assert.equal(replay.headers.get('set-cookie'), null);
+});
+test('verification replaces a different session and retains the verified account role', async () => {
+  const admin = await user(false, 'admin');
+  const other = await user();
+  const token = randomBytes(24).toString('hex');
+  await pool.query('UPDATE users SET verify_token=$1 WHERE id=$2', [token, admin.id]);
+  const responses = await Promise.all(Array.from({ length: 2 }, () => fetch(`${base}/auth/verify?token=${token}`, { headers: { cookie: other.cookie } })));
+  assert.deepEqual(responses.map((r) => r.status).sort(), [200, 400]);
+  const response = responses.find((r) => r.status === 200)!;
+  const session = response.headers.get('set-cookie');
+  assert.ok(session);
+  const signedIn = { id: admin.id, cookie: session.split(';')[0] };
+  const me = await request('/auth/me', 'GET', signedIn);
+  assert.equal(me.body.id, admin.id);
+  assert.equal(me.body.role, 'admin');
+  assert.equal((await request('/admin/reports', 'GET', signedIn)).status, 200);
+  assert.equal(responses.find((r) => r.status === 400)!.headers.get('set-cookie'), null);
+});
+test('verification never signs in a suspended account or accepts invalid tokens', async () => {
+  const member = await user(false);
+  const token = randomBytes(24).toString('hex');
+  await pool.query("UPDATE users SET verify_token=$1,status='suspended' WHERE id=$2", [token, member.id]);
+  for (const path of [`/auth/verify?token=${token}`, '/auth/verify?token=not-a-real-verification-token', '/auth/verify?token=short', '/auth/verify']) {
+    const response = await fetch(base + path);
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get('set-cookie'), null);
+  }
+  assert.equal((await pool.query('SELECT email_verified FROM users WHERE id=$1', [member.id])).rows[0].email_verified, false);
+});
+test('production verification creates a Secure session cookie', async () => {
+  const member = await user(false);
+  const token = randomBytes(24).toString('hex');
+  await pool.query('UPDATE users SET verify_token=$1 WHERE id=$2', [token, member.id]);
+  const result = await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
+    const assert=require('node:assert/strict'); const {app}=require('./src/server'); const {pool}=require('./src/db');
+    (async()=>{
+      const server=app.listen(0,'127.0.0.1'); await new Promise(resolve=>server.once('listening',resolve));
+      try {
+        const response=await fetch('http://127.0.0.1:'+server.address().port+'/auth/verify?token='+process.env.TEST_VERIFY_TOKEN);
+        assert.equal(response.status,200);
+        const cookie=response.headers.get('set-cookie');
+        assert.match(cookie,/; Secure(?:;|$)/i); assert.match(cookie,/; HttpOnly(?:;|$)/i); assert.match(cookie,/SameSite=Lax/i);
+        assert.equal(response.headers.get('cache-control'),'no-store');
+      } finally {await new Promise(resolve=>server.close(resolve)); await pool.end()}
+      console.log('production verification cookie verified');
+    })().catch(e=>{console.error(e);process.exit(1)});
+  `], { env: { ...process.env, NODE_ENV: 'production', TEST_VERIFY_TOKEN: token }, timeout: 15000 });
+  assert.match(result.stdout, /production verification cookie verified/);
+});
 test('shared free host starts API and rankings and closes database connections', async () => {
   const result = await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
     const assert=require('node:assert/strict');
