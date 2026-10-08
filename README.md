@@ -8,7 +8,7 @@ Two apps in one folder:
 The browser only talks to the website. The website forwards `/api/...` to the backend, so cookies stay on one address and no CORS setup is needed.
 
 ## What you need installed
-Node.js 20 or newer, Docker (for PostgreSQL), and VS Code. Optional: an email service (SMTP) and S3-compatible storage (AWS S3, Cloudflare R2 or similar) for sign-up emails and pictures.
+Node.js 20.9 or newer and PostgreSQL. Docker is one way to run PostgreSQL; a local installation also works. The verified frontend uses Next.js 16.4 and React 19.3 after the approved security upgrades; the backend mail transport is Nodemailer 10.0.16. Package lockfiles are committed. An SMTP service is optional for local verification, and S3-compatible storage is needed for pictures.
 
 ## Run it locally
 
@@ -30,15 +30,48 @@ npm install
 npm run dev                     # site on http://localhost:3001
 ```
 
-Open http://localhost:3001. Click "Join The Creator Generation", register, and (with no SMTP set) copy the verification link printed in the API terminal. For quick local testing you can set `REQUIRE_VERIFIED_EMAIL=false` in `api/.env`.
+Open **http://localhost:3001**. Use this address consistently: `APP_ORIGIN` is exactly `http://localhost:3001`, so writes from `http://127.0.0.1:3001` are rejected by the Origin check. Click "Join The Creator Generation", register, and (with no SMTP set) copy the verification link printed in the API terminal. Keep `REQUIRE_VERIFIED_EMAIL=true` when testing membership gates.
+
+### PostgreSQL without Docker
+
+Create a development database and a **different** test database, then apply the schema to the development database:
+
+```bash
+createdb -U htafl htafl
+createdb -U htafl htafl_test
+psql -U htafl -d htafl -v ON_ERROR_STOP=1 -f db/schema.sql
+```
+
+Run these in `api/` with an existing PostgreSQL role and its password configured. Set `DATABASE_URL` and `TEST_DATABASE_URL` in `api/.env`; use a random JWT secret. The test runner recreates the public schema in the dedicated test database. It refuses a missing test URL, a database name without the `_test` suffix, or the same URL as the application database. Never point it at valuable data.
+
+On this Windows machine, Docker was unavailable. Portable PostgreSQL **17.11** is prepared under `../.local-tools/pg-runtime/`, with development and test databases listening on `127.0.0.1:5432`. Local secrets and database files are outside this repository. To restart the prepared services without reinitializing data:
+
+```powershell
+# From htafl-site/
+.\scripts\start-local.ps1
+```
+
+This machine-specific helper starts hidden background processes and writes logs to `../.local-tools/*.log`. It was run successfully. The API is on port 3000, the web app on 3001, and local S3 test storage on 9000.
 
 **Make Featured and Rising fill in:** only votes from verified accounts at least 24 hours old count. Register a few accounts, vote between them, then run this in the database:
 
 ```sql
-UPDATE users SET created_at = now() - interval '2 days', email_verified = true;
+UPDATE users SET created_at = now() - interval '2 days', email_verified = true
+WHERE email IN ('your-local-test-account@example.test');
 ```
 
 **Make yourself a moderator:** `UPDATE users SET role = 'moderator' WHERE email = 'you@example.com';` then open /admin.
+
+Refresh the website after changing a role so navigation reads the current account. Backend moderation permissions now read the database on each request, including promotion, demotion and suspension; signing in again is not required.
+
+For labelled disposable ranking and pagination data in a local environment only:
+
+```bash
+cd api
+npx tsx scripts/dev-seed.ts --dev-only
+```
+
+The script requires a loopback database, `APP_ORIGIN=http://localhost:3001`, and a non-production environment. It is never imported or run by the application. It creates 11 `Local QA seed` accounts, eight ranking candidates, 18 pagination posts, and trusted votes. All posts are explicitly labelled `LOCAL QA` and disposable. Do not copy the local database or its seed accounts into production.
 
 ## Turn on pictures
 1. Create a bucket and an access key with your storage provider.
@@ -48,7 +81,9 @@ UPDATE users SET created_at = now() - interval '2 days', email_verified = true;
 ```json
 [{ "AllowedOrigins": ["http://localhost:3001"], "AllowedMethods": ["PUT"], "AllowedHeaders": ["content-type"], "MaxAgeSeconds": 3000 }]
 ```
-The composer shows the picture button once the API reports uploads are on. Pictures are shrunk in the browser first. Also add a lifecycle rule to delete uploads never attached to a post.
+The composer shows the picture button once the API reports uploads are on. Pictures are shrunk to a maximum 1200px dimension and converted to JPEG in the browser. The backend accepts JPEG, PNG and WebP metadata and rejects pictures larger than **2,000,000 bytes after upload**, or keys owned by another member. Also add a lifecycle rule to delete uploads never attached to a post.
+
+For this verification, MinIO could not be used: Docker is absent and its official community Windows binary download returned HTTP 410. A loopback-only **S3rver test emulator** is prepared in `../.local-tools/s3/` and started by the Windows helper. The real browser successfully uploaded and displayed a picture through the existing presigned PUT and HeadObject flow. This proves the local flow, not compatibility, policies or scanning on a production storage provider. S3rver's CORS response permits `*`; configure your production bucket to allow your actual website origin. Its credentials are test-only and must never be used for a hosted bucket.
 
 ## Turn on email
 Set `SMTP_URL` (for example `smtp://user:pass@smtp.yourprovider.com:587`) and `MAIL_FROM` in `api/.env`.
@@ -71,4 +106,25 @@ Set `SMTP_URL` (for example `smtp://user:pass@smtp.yourprovider.com:587`) and `M
 - Decide whether under-18s are in scope. That changes sign-up, privacy and safety rules.
 
 ## What has and hasn't been verified
-The ranking logic in `api/src/ranking/score.ts` compiles and its 8 unit tests pass (`cd api && npm test`). All other files were checked only for syntax, not run: `npm install` and a database weren't available where this was written. Expect to fix a few small errors on first run. Start with `npm run typecheck` in both folders and send the messages to your developer or back to Claude.
+
+Verification was performed on **8 October 2026**, using Node 26.9.0, npm 11.19.1, PostgreSQL 17.11 and the Codex in-app browser. Both apps were installed and actually run. The API `/health` and the website `/api/health` proxy returned `{ "ok": true }`.
+
+```bash
+# In api/: requires TEST_DATABASE_URL in .env
+npm run typecheck
+npm test
+npm run build
+npm audit --audit-level=low
+
+# In web/
+npm run typecheck
+npm test
+npm run build
+npm audit --audit-level=low
+```
+
+All commands passed: **19 API tests** (eight original ranking tests plus 11 integration tests) and **four web API-client tests**. No tests were skipped during this machine's run. The storage integration test is explicitly skipped elsewhere unless `S3_ENDPOINT` names the prepared loopback server on port 9000. The database tests cover concurrent unique votes, switching/removing votes and counters, self-vote rejection, tied and microsecond keyset pagination, membership gates, Origin rejection, author-only changes, ranking exclusions/fairness, current moderator permissions, distress flags, hidden comments and local uploads. The web tests cover cookies, server errors, proxy failures and network failures. Both audits reported zero known vulnerabilities in the committed dependency versions at the time of verification.
+
+The real browser passed registration, console-link email verification, logout/login, text and picture posting, the distress support message, own-post vote rejection, up/down/removal, comments visible to two accounts, reporting, author editing and delete confirmation/cancellation, moderator report resolution/hiding/reviewing, Featured/Rising with trusted local votes, Latest pagination and Browse filters. Slider autoplay, pause and manual previous/next controls worked. At a 390px viewport the page had no horizontal overflow; dark mode and visible keyboard focus were checked. A failed save preserved its draft. An intentional API outage displayed a load error and **Try again** recovered after the API restarted. Privacy, Accessibility and Credits remain the requested placeholders.
+
+SMTP delivery, production hosting/HTTPS cookies, a real S3 provider, image scanning, load testing, screen-reader testing, other browsers, forced light/reduced-motion modes and production moderation operations have **not** been verified. Full findings, remaining risks and open decisions are in [verification/REPORT.md](verification/REPORT.md). Browser screenshots are in [verification/desktop.jpg](verification/desktop.jpg) and [verification/mobile.jpg](verification/mobile.jpg).
