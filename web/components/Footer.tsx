@@ -10,8 +10,10 @@ export default function Footer() {
       <div className="fw">
         <p className="wm">HTAFL</p>
         <p className="tag">Hope. Talent. Art. Fashion. Life.</p>
-        <a className="mail" href="mailto:htafl@africamail.com">htafl@africamail.com</a>
         <ul className="soc">
+          <li><a href="mailto:htafl@africamail.com" aria-label="Email HTAFL at htafl@africamail.com" title="Email htafl@africamail.com">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 6 9 7 9-7" /></svg>
+          </a></li>
           {ig && (
             <li><a className="ig" href={ig} aria-label="HTAFL on Instagram (@htaflco)" title="Instagram @htaflco" target="_blank" rel="noopener noreferrer">
               <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.3" cy="6.7" r=".6" fill="#fff" /></svg>

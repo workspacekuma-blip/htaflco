@@ -133,7 +133,6 @@ button { cursor: pointer; }
 .sf .fw { max-width: 62rem; margin: 0 auto; padding: 0 1.5rem; }
 .sf .wm { font-family: var(--d); font-weight: 500; font-size: clamp(2.6rem, 9vw, 3.6rem); letter-spacing: .42em; line-height: 1; margin: 0; }
 .sf .tag { font-family: var(--d); font-weight: 500; font-size: clamp(1.25rem, 3.5vw, 1.7rem); margin: 1.75rem 0 0; }
-.sf .mail { display: inline-block; margin-top: 2.25rem; font-family: var(--d); font-weight: 500; font-size: 1.1rem; text-underline-offset: 4px; }
 .sf .soc { display: flex; gap: 1rem; margin: 1.75rem 0 0; padding: 0; list-style: none; }
 .sf .soc a { display: flex; align-items: center; justify-content: center; width: 3.4rem; height: 3.4rem; border-radius: 50%; border: 1.5px solid #fff; }
 .sf .soc a.ig { border-color: transparent; background: linear-gradient(135deg, #7B3FE4, #D6249F 50%, #FDB04B); }
