@@ -386,7 +386,7 @@ test('shared free host starts API and rankings and closes database connections',
   assert.match(result.stdout, /shared host verified/);
   assert.doesNotMatch(result.stdout, /verify\?token=/);
 });
-test('production picture publishing stays disabled until a scanning provider is implemented', async () => {
+test('production picture publishing stays disabled without an explicit publication mode', async () => {
   await promisify(execFile)(process.execPath, ['--require', 'tsx/cjs', '-e', `
     const assert=require('node:assert/strict'); const media=require('./src/media');
     assert.equal(media.mediaEnabled,false);
@@ -586,9 +586,54 @@ test('distress notice is retained and hidden post comments are not publicly expo
   const author = await user();
   const r = await request('/posts', 'POST', author, { body: 'I do not want to hurt myself' });
   assert.equal(r.status, 201); assert.equal(r.body.supportNotice, true);
+  assert.equal(r.body.pendingReview, false);
+  assert.equal((await request(`/posts/${r.body.id}`)).status, 200);
   await request(`/posts/${r.body.id}/comments`, 'POST', author, { body: 'Private after hiding' });
   await pool.query("UPDATE posts SET status='hidden' WHERE id=$1", [r.body.id]);
   assert.equal((await request(`/posts/${r.body.id}/comments`)).status, 404);
+});
+
+for (const kind of ['picture', 'video'] as const) test(`immediate ${kind} posts publish validated immutable files without approval`, {
+  skip: !/^http:\/\/(localhost|127\.0\.0\.1):9000$/.test(process.env.S3_ENDPOINT ?? ''),
+}, async () => {
+  const { config } = require('../src/config') as typeof import('../src/config');
+  const oldMode = config.mediaReviewMode; const oldProd = config.isProd;
+  config.mediaReviewMode = 'immediate'; config.isProd = true;
+  const videoPath = join(tmpdir(), `htafl-immediate-${randomBytes(8).toString('hex')}.mp4`);
+  try {
+    const author = await user(); const other = await user(); const unverified = await user(false);
+    const contentType = kind === 'picture' ? 'image/png' : 'video/mp4';
+    const mediaConfig = (await request('/media/config')).body;
+    assert.equal(mediaConfig.enabled, true); assert.equal(mediaConfig.videoEnabled, true); assert.equal(mediaConfig.pendingReview, false);
+    assert.equal((await request('/media/upload-url', 'POST', unverified, { contentType })).status, 403);
+    const signed = await request('/media/upload-url', 'POST', author, { contentType });
+    assert.equal(signed.status, 200);
+    let bytes = readFileSync('../scripts/fixtures/upload-test.png');
+    if (kind === 'video') {
+      await promisify(execFile)(require('ffmpeg-static'), ['-hide_banner','-loglevel','error','-f','lavfi','-i','color=c=blue:s=160x90:r=10','-f','lavfi','-i','sine=frequency=440','-t','2','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac',videoPath]);
+      bytes = await readFile(videoPath);
+    }
+    assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': contentType }, body: bytes })).ok);
+    assert.equal((await request('/posts', 'POST', other, { body: 'Wrong owner', mediaKey: signed.body.key })).status, 400);
+    const created = await request('/posts', 'POST', author, { title: 'Local integration fixture', body: 'I do not want to hurt myself', mediaKey: signed.body.key });
+    assert.equal(created.status, 201); assert.equal(created.body.pendingReview, false); assert.equal(created.body.supportNotice, true);
+    const detail = await request(`/posts/${created.body.id}`);
+    assert.equal(detail.status, 200); assert.equal(detail.body.status, 'published'); assert.equal(detail.body.mediaKind, kind);
+    assert.ok((await request('/feed/latest')).body.items.some((p: any) => p.id === created.body.id));
+    const mediaPath = new URL(detail.body.mediaUrl).pathname.replace(/^\/api/, '');
+    const file = await fetch(base + mediaPath); assert.equal(file.status, 200);
+    const immutable = Buffer.from(await file.arrayBuffer());
+    assert.ok((await fetch(signed.body.url, { method: 'PUT', headers: { 'content-type': contentType }, body: Buffer.from('invalid replacement') })).ok);
+    assert.deepEqual(Buffer.from(await (await fetch(base + mediaPath)).arrayBuffer()), immutable);
+    assert.equal((await request('/posts', 'POST', author, { body: 'Reuse', mediaKey: signed.body.key })).status, 400);
+    const invalid = await request('/media/upload-url', 'POST', author, { contentType });
+    await fetch(invalid.body.url, { method: 'PUT', headers: { 'content-type': contentType }, body: Buffer.from('invalid attachment') });
+    assert.equal((await request('/posts', 'POST', author, { body: 'Invalid upload', mediaKey: invalid.body.key })).status, 400);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM posts')).rows[0].n, 1);
+    const moderator = await user(true, 'moderator');
+    await request(`/admin/posts/${created.body.id}/status`, 'POST', moderator, { status: 'hidden' });
+    assert.equal((await fetch(base + mediaPath)).status, 404);
+  } finally { config.mediaReviewMode = oldMode; config.isProd = oldProd; await unlink(videoPath).catch(() => {}); }
 });
 
 test('private media waits for human review, serves ranges, and cannot be overwritten or reused', {

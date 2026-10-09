@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Authed, perUser, requireMember } from '../auth';
 import { ah } from '../http';
-import { MAX_BYTES, isMediaEnabled, manualReview, presignUpload, s3 } from '../media';
+import { MAX_BYTES, isMediaEnabled, manualReview, privateMedia, presignUpload, s3 } from '../media';
 import { readableMedia } from '../private-media';
 import { MAX_VIDEO_BYTES, MAX_VIDEO_SECONDS } from '../video';
 import { GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
@@ -14,7 +14,7 @@ import type { Readable } from 'node:stream';
 export const mediaRouter = Router();
 
 mediaRouter.get('/media/config', (_req, res) => {
-  res.json({ enabled: isMediaEnabled(), maxBytes: MAX_BYTES, videoEnabled: isMediaEnabled() && manualReview(), maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, pendingReview: manualReview() });
+  res.json({ enabled: isMediaEnabled(), maxBytes: MAX_BYTES, videoEnabled: isMediaEnabled() && privateMedia(), maxVideoBytes: MAX_VIDEO_BYTES, maxVideoSeconds: MAX_VIDEO_SECONDS, pendingReview: manualReview() });
 });
 
 mediaRouter.get('/media/assets/:id', ah(async (req, res) => {

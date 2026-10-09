@@ -10,10 +10,11 @@ import { pool } from './db';
 export const storageConfigured = Boolean(
   config.s3Bucket && config.s3AccessKeyId && config.s3SecretAccessKey,
 );
-// No unsafe-content provider has been selected. Never publish unscanned production pictures.
+// Production uploads require an explicit publication mode and private validated storage.
 export const mediaEnabled = storageConfigured && !config.isProd;
 export const manualReview = () => config.mediaReviewMode === 'manual';
-export const isMediaEnabled = () => storageConfigured && (manualReview() || !config.isProd);
+export const privateMedia = () => manualReview() || config.mediaReviewMode === 'immediate';
+export const isMediaEnabled = () => storageConfigured && (privateMedia() || !config.isProd);
 export const MAX_BYTES = 2_000_000;
 const MAX_PIXELS = 16_000_000;
 const TYPES: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
@@ -31,12 +32,12 @@ export const s3 = storageConfigured
 
 /** A short-lived link the browser uses to upload one picture straight to storage. */
 export async function presignUpload(userId: string, contentType: string) {
-  if (config.isProd && !manualReview()) throw new HttpError(503, 'Media publishing is pending production review setup.');
+  if (config.isProd && !privateMedia()) throw new HttpError(503, 'Media publishing is not configured.');
   if (!s3) throw new HttpError(501, 'Picture upload is not set up');
-  const ext = TYPES[contentType] ?? (manualReview() && contentType === 'video/mp4' ? 'mp4' : undefined);
+  const ext = TYPES[contentType] ?? (privateMedia() && contentType === 'video/mp4' ? 'mp4' : undefined);
   if (!ext) throw new HttpError(400, 'Use a JPEG, PNG, WebP picture or MP4 video');
   const key = `uploads/${userId}/${randomUUID()}.${ext}`;
-  if (manualReview()) await pool.query('INSERT INTO post_media(owner_id,source_key,kind) VALUES($1,$2,$3)', [userId, key, ext === 'mp4' ? 'video' : 'picture']);
+  if (privateMedia()) await pool.query('INSERT INTO post_media(owner_id,source_key,kind) VALUES($1,$2,$3)', [userId, key, ext === 'mp4' ? 'video' : 'picture']);
   const url = await getSignedUrl(
     s3,
     new PutObjectCommand({ Bucket: config.s3Bucket, Key: key, ContentType: contentType }),

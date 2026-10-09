@@ -13,18 +13,21 @@ export default function Admin() {
   const [reports, setReports] = useState<Report[]>([]);
   const [flagged, setFlagged] = useState<Flagged[]>([]);
   const [media, setMedia] = useState<Post[]>([]);
+  const [reviewMedia, setReviewMedia] = useState(false);
   const [msg, setMsg] = useState('');
   const allowed = me && (me.role === 'moderator' || me.role === 'admin');
 
   const load = useCallback(async () => {
-    const [r, f, m] = await Promise.all([
+    const [r, f, m, settings] = await Promise.all([
       api<{ items: Report[] }>('/admin/reports'),
       api<{ items: Flagged[] }>('/admin/sensitive'),
       api<{ items: Post[] }>('/admin/media-pending'),
+      api<{ pendingReview: boolean }>('/media/config'),
     ]);
     setReports(r.items);
     setFlagged(f.items);
     setMedia(m.items);
+    setReviewMedia(settings.pendingReview);
   }, []);
 
   useEffect(() => { if (allowed) void load().catch((e) => setMsg((e as Error).message)); }, [allowed, load]);
@@ -43,6 +46,7 @@ export default function Admin() {
       <PromptScheduler />
       {msg && <p className="error" role="alert">{msg}</p>}
 
+      {reviewMedia && <section>
       <h2>Pictures and videos awaiting review ({media.length})</h2>
       <p className="note">Review the complete post and attachment before publishing. This is human review; files have not been automatically scanned for unsafe content. Video: watch the whole clip and listen to its audio.</p>
       {!media.length && <p className="note">No media posts awaiting review.</p>}
@@ -54,6 +58,7 @@ export default function Admin() {
         <div className="acts"><button type="button" onClick={() => void run(() => api(`/admin/posts/${p.id}/approve-media`, { method: 'POST' }))}>Approve and publish</button>
           <button type="button" onClick={() => void run(() => setStatus(p.id, 'hidden'))}>Hide</button></div>
       </article>)}</div>
+      </section>}
 
       <h2>Open reports ({reports.length})</h2>
       {reports.length === 0 && <p className="note">No open reports.</p>}

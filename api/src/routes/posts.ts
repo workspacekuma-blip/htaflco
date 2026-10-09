@@ -4,7 +4,7 @@ import { Authed, perUser, requireAuth, requireMember } from '../auth';
 import { pool, tx } from '../db';
 import { ah, HttpError } from '../http';
 import { feedPage, POST_SELECT } from '../queries';
-import { manualReview, verifiedUrl } from '../media';
+import { manualReview, privateMedia, verifiedUrl } from '../media';
 import { prepareMedia } from '../private-media';
 import { config } from '../config';
 import { flagSensitive } from '../safety';
@@ -46,22 +46,24 @@ postsRouter.post('/posts', requireMember, perUser(30, 3600_000), ah(async (req, 
     if (!current.rowCount) throw new HttpError(400, 'That weekly prompt is not current. Refresh the prompt and try again.');
   }
   const sensitive = flagSensitive(`${b.title ?? ''}\n${b.body}`);
-  const mediaId = b.mediaKey && manualReview() ? await prepareMedia(uidOf(req), b.mediaKey) : null;
+  const mediaId = b.mediaKey && privateMedia() ? await prepareMedia(uidOf(req), b.mediaKey) : null;
+  const pendingReview = Boolean(mediaId) && manualReview();
   const mediaUrl = mediaId ? `${config.appOrigin}/api/media/assets/${mediaId}` : b.mediaKey ? await verifiedUrl(uidOf(req), b.mediaKey) : null;
   const createdId = await tx(async (c) => {
     if (mediaId) {
-      const asset = await c.query("SELECT 1 FROM post_media WHERE id=$1 AND owner_id=$2 AND state='pending' FOR UPDATE", [mediaId,uidOf(req)]);
+      const asset = await c.query("SELECT 1 FROM post_media WHERE id=$1 AND owner_id=$2 AND state='pending' AND storage_key IS NOT NULL FOR UPDATE", [mediaId,uidOf(req)]);
       if (!asset.rowCount || (await c.query('SELECT 1 FROM posts WHERE media_id=$1', [mediaId])).rowCount) throw new HttpError(400, 'This attachment has already been used. Upload a new file.');
+      if (!pendingReview) await c.query("UPDATE post_media SET state='approved',updated_at=now() WHERE id=$1", [mediaId]);
     }
     const { rows } = await c.query(
       `INSERT INTO posts (author_id, body, pillar, craft, sensitive, media_url, title, response_label, challenge_id, media_id, media_alt, status)
        SELECT $1, $2, $3::pillar, pr.craft, $4, $5, $6, $7, $8, $9, $10, $11::post_status FROM profiles pr WHERE pr.user_id = $1 RETURNING id`,
-      [uidOf(req), b.body, b.pillar, sensitive, mediaUrl, b.title ?? null, b.responseLabel, b.promptId ?? null, mediaId, b.mediaAlt ?? null, mediaId ? 'pending' : 'published'],
+      [uidOf(req), b.body, b.pillar, sensitive, mediaUrl, b.title ?? null, b.responseLabel, b.promptId ?? null, mediaId, b.mediaAlt ?? null, pendingReview ? 'pending' : 'published'],
     );
     return rows[0].id;
   });
   // supportNotice: the front end should show supportive resources for the member's region.
-  res.status(201).json({ id: createdId, supportNotice: sensitive, pendingReview: Boolean(mediaId) });
+  res.status(201).json({ id: createdId, supportNotice: sensitive, pendingReview });
 }));
 
 // Edit your own post's words.
